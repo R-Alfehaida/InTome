@@ -1,1 +1,2 @@
-//! STUB: replaced by the port of prism/ai.
+//! STUB: port of prism/ai.
+pub mod client;

@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod annotation;
+pub mod cancel;
 pub mod config;
 pub mod constants;
 pub mod document;
