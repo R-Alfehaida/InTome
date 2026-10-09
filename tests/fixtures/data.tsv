@@ -1,0 +1,100 @@
+id	name	city	score	notes
+1	Fatima Khan	Berlin	81	"said ""hello, world"""
+2	Ada Lovelace	Paris	46	 padded 
+3	Fatima Khan	London, UK	53	 padded 
+4	Ada Lovelace	Paris	66	"said ""hello, world"""
+5	"Bob ""B"" Smith"	Tokyo	75	
+6	Grace Hopper	London, UK	47	 padded 
+7	Dmitri Ivanov	London, UK	77	 padded 
+8	Grace Hopper	London, UK	42	on leave
+9	Carol Danvers	New York, NY	49	"said ""hello, world"""
+10	"Bob ""B"" Smith"	New York, NY	92	 padded 
+11	Carol Danvers	Paris	76	 padded 
+12	Dmitri Ivanov	Cairo	75	
+13	"Bob ""B"" Smith"	London, UK	53	 padded 
+14	Hiro Tanaka	Lima	69	needs review
+15	Hiro Tanaka	Cairo	55	needs review
+16	Carol Danvers	Tokyo	76	
+17	Eve Adams	Oslo	86	needs review
+18	Hiro Tanaka	New York, NY	44	 padded 
+19	"Bob ""B"" Smith"	Lima	88	on leave
+20	Fatima Khan	Berlin	66	"said ""hello, world"""
+21	Ada Lovelace	Paris	76	 padded 
+22	Fatima Khan	Cairo	78	needs review
+23	Hiro Tanaka	Oslo	93	
+24	"Bob ""B"" Smith"	New York, NY	84	"said ""hello, world"""
+25	"Bob ""B"" Smith"	London, UK	81	needs review
+26	Hiro Tanaka	New York, NY	96	"said ""hello, world"""
+27	Fatima Khan	London, UK	62	"said ""hello, world"""
+28	Carol Danvers	Paris	43	"said ""hello, world"""
+29	Dmitri Ivanov	New York, NY	87	on leave
+30	Dmitri Ivanov	Lima	98	"said ""hello, world"""
+31	Hiro Tanaka	Paris	68	on leave
+32	Grace Hopper	New York, NY	92	on leave
+33	Grace Hopper	New York, NY	62	"said ""hello, world"""
+34	Grace Hopper	Tokyo	45	on leave
+35	Carol Danvers	Berlin	82	on leave
+36	Dmitri Ivanov	London, UK	93	"said ""hello, world"""
+37	Carol Danvers	New York, NY	40	needs review
+38	Carol Danvers	Lima	63	 padded 
+39	Fatima Khan	Berlin	100	 padded 
+40	Ada Lovelace	Oslo	65	 padded 
+41	Grace Hopper	Lima	46	"said ""hello, world"""
+42	Hiro Tanaka	Lima	52	
+43	"Bob ""B"" Smith"	Tokyo	50	"said ""hello, world"""
+44	"Bob ""B"" Smith"	Cairo	43	 padded 
+45	"Bob ""B"" Smith"	London, UK	49	 padded 
+46	"Bob ""B"" Smith"	Cairo	41	 padded 
+47	"Bob ""B"" Smith"	Tokyo	64	 padded 
+48	Carol Danvers	New York, NY	78	needs review
+49	Fatima Khan	Oslo	47	
+50	Hiro Tanaka	Oslo	70	"said ""hello, world"""
+51	Eve Adams	Paris	46	on leave
+52	Fatima Khan	New York, NY	93	"said ""hello, world"""
+53	Carol Danvers	London, UK	100	on leave
+54	Fatima Khan	Berlin	98	 padded 
+55	Ada Lovelace	New York, NY	84	
+56	Eve Adams	Cairo	62	on leave
+57	Dmitri Ivanov	Cairo	79	on leave
+58	Dmitri Ivanov	Tokyo	87	"said ""hello, world"""
+59	Dmitri Ivanov	Tokyo	71	 padded 
+60	Fatima Khan	London, UK	90	
+61	Eve Adams	Oslo	52	needs review
+62	Fatima Khan	Oslo	63	needs review
+63	"Bob ""B"" Smith"	Tokyo	54	
+64	Hiro Tanaka	Tokyo	53	needs review
+65	Hiro Tanaka	London, UK	98	"said ""hello, world"""
+66	Fatima Khan	Paris	98	
+67	Grace Hopper	Tokyo	96	"said ""hello, world"""
+68	Carol Danvers	Lima	45	needs review
+69	Grace Hopper	Oslo	87	"said ""hello, world"""
+70	"Bob ""B"" Smith"	Berlin	48	on leave
+71	Ada Lovelace	Berlin	97	 padded 
+72	Hiro Tanaka	Berlin	92	 padded 
+73	Hiro Tanaka	Cairo	75	on leave
+74	Carol Danvers	London, UK	91	
+75	"Bob ""B"" Smith"	Berlin	95	"said ""hello, world"""
+76	Dmitri Ivanov	Tokyo	56	
+77	Dmitri Ivanov	New York, NY	55	 padded 
+78	Fatima Khan	New York, NY	66	 padded 
+79	Carol Danvers	London, UK	97	needs review
+80	Hiro Tanaka	Lima	48	 padded 
+81	Carol Danvers	London, UK	89	"said ""hello, world"""
+82	Carol Danvers	London, UK	51	on leave
+83	Carol Danvers	Oslo	86	 padded 
+84	"Bob ""B"" Smith"	London, UK	83	needs review
+85	Hiro Tanaka	Paris	43	 padded 
+86	Dmitri Ivanov	Tokyo	42	needs review
+87	"Bob ""B"" Smith"	Oslo	41	 padded 
+88	"Bob ""B"" Smith"	Oslo	79	needs review
+89	Dmitri Ivanov	New York, NY	72	"said ""hello, world"""
+90	Hiro Tanaka	Tokyo	96	 padded 
+91	Eve Adams	Tokyo	48	"said ""hello, world"""
+92	Grace Hopper	Paris	68	"said ""hello, world"""
+93	Fatima Khan	Paris	67	on leave
+94	"Bob ""B"" Smith"	Tokyo	90	needs review
+95	"Bob ""B"" Smith"	Berlin	49	needs review
+96	Eve Adams	Berlin	54	"said ""hello, world"""
+97	"Bob ""B"" Smith"	Lima	50	"said ""hello, world"""
+98	Dmitri Ivanov	Berlin	72	"said ""hello, world"""
+99	Grace Hopper	Cairo	52	"said ""hello, world"""
