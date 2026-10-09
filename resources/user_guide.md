@@ -224,7 +224,7 @@ Press **Ctrl+Shift+P** to open the Batch Convert dialog. Add multiple files, cho
 
 Press **Ctrl+Comma** to open the Preferences dialog. Settings are organized into pages:
 
-- **General** -- continuous reading, recent files limit
+- **General** -- continuous reading, recent files limit, remember reading position
 - **Display** -- font, font size, OpenDyslexic toggle, line spacing
 - **Document** -- PDF reading mode, cache settings
 - **Gemini Models** -- model selection, mode, concurrency, timeout

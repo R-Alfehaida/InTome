@@ -34,6 +34,8 @@ pub struct General {
     pub continuous_reading: bool,
     pub page_size: usize,
     pub recent_files_limit: usize,
+    /// Reopen each file at the page and caret it was closed at.
+    pub remember_position: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -198,7 +200,7 @@ impl Default for Settings {
 
 impl Default for General {
     fn default() -> Self {
-        Self { continuous_reading: false, page_size: constants::DEFAULT_PAGE_SIZE, recent_files_limit: 10 }
+        Self { continuous_reading: false, page_size: constants::DEFAULT_PAGE_SIZE, recent_files_limit: 10, remember_position: true }
     }
 }
 

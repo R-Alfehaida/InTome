@@ -232,6 +232,16 @@ impl ContentView {
         self.advancing.set(false);
     }
 
+    /// Shows `page` with the caret at `caret` (chars), both clamped to the document,
+    /// without a page announcement or a continuous-reading turn: reopening a document.
+    pub fn restore_position(&self, page: usize, caret: usize) {
+        self.page.set(page.min(self.page_count().saturating_sub(1)));
+        self.advancing.set(true);
+        self.show_current_page();
+        self.select(caret, caret);
+        self.advancing.set(false);
+    }
+
     pub fn show_current_page(&self) {
         self.end_announced.set(false);
         self.edit.set_text(&shown_text(&self.current_text()));

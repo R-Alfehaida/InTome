@@ -138,8 +138,10 @@ fn general(p: &Page, cfg: &Settings) -> Save {
     let continuous = p.check("Continuous reading (auto-advance pages)", cfg.general.continuous_reading);
     let limit = cfg.general.recent_files_limit as u32;
     let recent = p.spin("Recent files limit:", limit, 1, 50);
+    let remember = p.check("Remember reading position", cfg.general.remember_position);
     Box::new(move |s| {
         s.general.continuous_reading = continuous.is_checked();
+        s.general.remember_position = remember.is_checked();
         s.general.recent_files_limit = spin_value(&recent, 1, 50, limit) as usize;
     })
 }

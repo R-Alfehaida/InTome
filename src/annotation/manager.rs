@@ -1,4 +1,4 @@
-//! CRUD for bookmarks, notes and quotes.
+//! CRUD for bookmarks, notes and quotes, plus each document's last reading position.
 //!
 //! Like Prism's session-per-call design, every method opens its own SQLite connection, so the
 //! manager is `Send + Sync` and can be shared between the UI and worker threads. Mutating
@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS quotes (
     PRIMARY KEY (id)
 );
 CREATE INDEX IF NOT EXISTS ix_quotes_document_hash ON quotes (document_hash);
+CREATE TABLE IF NOT EXISTS reading_positions (
+    document_hash VARCHAR(32) NOT NULL,
+    page_index INTEGER NOT NULL,
+    char_position INTEGER NOT NULL,
+    updated_at DATETIME,
+    PRIMARY KEY (document_hash)
+);
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -287,6 +294,27 @@ impl AnnotationManager {
         Ok(rows)
     }
 
+    // Reading position
+
+    /// Remembers where `document_hash` was left, replacing any earlier position.
+    pub fn save_position(&self, document_hash: &str, page_index: usize, char_position: usize) -> anyhow::Result<()> {
+        self.conn()?.execute(
+            "INSERT OR REPLACE INTO reading_positions (document_hash, page_index, char_position, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![document_hash, page_index as i64, char_position as i64, now_db()],
+        )?;
+        Ok(())
+    }
+
+    /// (page, caret) where `document_hash` was left, if it was saved.
+    pub fn get_position(&self, document_hash: &str) -> anyhow::Result<Option<(usize, usize)>> {
+        let row = self.conn()?.query_row(
+            "SELECT page_index, char_position FROM reading_positions WHERE document_hash = ?1",
+            [document_hash],
+            |r| Ok((uz(r, 0)?, uz(r, 1)?)),
+        );
+        Ok(row.optional()?)
+    }
+
     // Statistics
 
     /// Counts for one document, or for everything when `document_hash` is `None`.
@@ -349,6 +377,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let m = AnnotationManager::new(dir.path().join("sub").join("annotations.db"));
         (dir, m)
+    }
+
+    #[test]
+    fn reading_position_is_saved_and_replaced() {
+        let (_dir, m) = manager();
+        assert_eq!(m.get_position("doc").unwrap(), None);
+        m.save_position("doc", 6, 120).unwrap();
+        m.save_position("doc", 7, 5).unwrap();
+        assert_eq!(m.get_position("doc").unwrap(), Some((7, 5)));
+        assert_eq!(m.get_position("other").unwrap(), None);
     }
 
     #[test]

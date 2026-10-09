@@ -811,6 +811,7 @@ impl MainWindow {
         let Some(index) = self.0.active.get() else { return };
         self.0.reader.stop();
         let v = self.0.views.borrow_mut().remove(index);
+        save_position(&v);
         unsafe {
             let _ = self.0.tabs.hwnd().SendMessage(msg::TcmDeleteItem { index: index as u32 });
         }
@@ -1252,7 +1253,15 @@ impl MainWindow {
         self.0.views.borrow_mut().push(view.clone());
         self.activate(index);
         self.sync_toc(&view);
-        view.show_current_page_quietly();
+        let saved = if config::get().general.remember_position {
+            report(AnnotationManager::global().get_position(&view.document_hash()), "read the reading position").flatten()
+        } else {
+            None
+        };
+        match saved {
+            Some((page, caret)) => view.restore_position(page, caret),
+            None => view.show_current_page_quietly(),
+        }
         let page_count = view.page_count();
 
         let _ = self.hwnd().SetWindowText(&if meta.author.is_empty() {
@@ -1267,6 +1276,9 @@ impl MainWindow {
         events::emit(AppEvent::DocumentLoaded { path: path.to_string_lossy().into_owned(), filename: filename.clone() });
 
         let mut msg = format!("Opened {title}, {page_count} pages");
+        if saved.is_some_and(|p| p != (0, 0)) {
+            msg += &format!(". Resumed at page {}", view.current_page() + 1);
+        }
         if caps.contains(Capabilities::NEEDS_OCR) {
             msg += ". This document may need OCR processing.";
         }
@@ -1765,6 +1777,7 @@ impl MainWindow {
         self.save_geometry();
         self.0.reader.stop();
         for v in self.0.views.borrow_mut().drain(..) {
+            save_position(&v);
             v.close();
         }
         let _ = self.hwnd().DestroyWindow();
@@ -1776,6 +1789,13 @@ fn file_name(path: &Path) -> String {
 }
 
 /// Logs and announces an annotation failure; the value on success.
+/// Remembers where `v` was left, when `general.remember_position` is on.
+fn save_position(v: &ContentView) {
+    if config::get().general.remember_position {
+        report(AnnotationManager::global().save_position(&v.document_hash(), v.current_page(), v.caret()), "save the reading position");
+    }
+}
+
 fn report<T>(result: anyhow::Result<T>, what: &str) -> Option<T> {
     result
         .map_err(|e| {
