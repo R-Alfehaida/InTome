@@ -113,13 +113,6 @@ impl DialogBuilder {
         route_next_dlg_ctl(self.wnd.on());
     }
 
-    /// Reserves `h` logical pixels and returns the row's top y.
-    fn take(&self, h: i32) -> i32 {
-        let top = self.y.get();
-        self.y.set(top + h + GAP);
-        top
-    }
-
     pub fn content_width(&self) -> i32 {
         self.width - 2 * MARGIN
     }
@@ -129,47 +122,18 @@ impl DialogBuilder {
         self.y.set(self.y.get() + h);
     }
 
+    fn take(&self, h: i32) -> i32 {
+        self.column().take(h)
+    }
+
     /// A static text line (status or explanation), read by screen readers in dialog review.
     pub fn text(&self, text: &str) -> gui::Label {
-        let y = self.take(ROW_H);
-        gui::Label::new(&self.wnd, gui::LabelOpts {
-            text,
-            position: gui::dpi(MARGIN, y + 3),
-            size: gui::dpi(self.content_width(), ROW_H - 3),
-            ..Default::default()
-        })
-    }
-
-    fn side_label(&self, label: &str, y: i32) -> gui::Label {
-        gui::Label::new(&self.wnd, gui::LabelOpts {
-            text: label,
-            position: gui::dpi(MARGIN, y + 3),
-            size: gui::dpi(LABEL_W - GAP, ROW_H - 3),
-            ..Default::default()
-        })
-    }
-
-    fn top_label(&self, label: &str) -> gui::Label {
-        let y = self.take(ROW_H - GAP);
-        gui::Label::new(&self.wnd, gui::LabelOpts {
-            text: label,
-            position: gui::dpi(MARGIN, y),
-            size: gui::dpi(self.content_width(), ROW_H - GAP),
-            ..Default::default()
-        })
+        self.column().text(text, 1)
     }
 
     /// Single-line edit with a label on its left. `style` extras: `co::ES::PASSWORD`, `co::ES::NUMBER`.
     pub fn edit_with(&self, label: &str, value: &str, style: co::ES) -> gui::Edit {
-        let y = self.take(ROW_H);
-        self.side_label(label, y);
-        gui::Edit::new(&self.wnd, gui::EditOpts {
-            text: value,
-            position: gui::dpi(MARGIN + LABEL_W, y),
-            width: gui::dpi_x(self.content_width() - LABEL_W),
-            control_style: co::ES::AUTOHSCROLL | co::ES::NOHIDESEL | style,
-            ..Default::default()
-        })
+        self.column().edit(label, value, style)
     }
 
     pub fn edit(&self, label: &str, value: &str) -> gui::Edit {
@@ -178,81 +142,31 @@ impl DialogBuilder {
 
     /// Multi-line edit with its label above.
     pub fn multiline(&self, label: &str, value: &str, height: i32, read_only: bool) -> gui::Edit {
-        self.top_label(label);
-        let y = self.take(height);
-        let ro = if read_only { co::ES::READONLY } else { co::ES::NoValue };
-        gui::Edit::new(&self.wnd, gui::EditOpts {
-            text: value,
-            position: gui::dpi(MARGIN, y),
-            width: gui::dpi_x(self.content_width()),
-            height: gui::dpi_y(height),
-            control_style: co::ES::MULTILINE | co::ES::WANTRETURN | co::ES::AUTOVSCROLL | co::ES::NOHIDESEL | ro,
-            window_style: co::WS::CHILD | co::WS::VISIBLE | co::WS::TABSTOP | co::WS::GROUP | co::WS::VSCROLL,
-            ..Default::default()
-        })
+        self.column().multiline(label, value, height, read_only)
     }
 
     pub fn check(&self, text: &str, checked: bool) -> gui::CheckBox {
-        let y = self.take(ROW_H);
-        gui::CheckBox::new(&self.wnd, gui::CheckBoxOpts {
-            text,
-            position: gui::dpi(MARGIN, y + 2),
-            size: gui::dpi(self.content_width(), ROW_H - 4),
-            check_state: if checked { co::BST::CHECKED } else { co::BST::UNCHECKED },
-            ..Default::default()
-        })
+        self.column().check(text, checked)
     }
 
     /// Drop-down list (not editable) with a label on its left.
     pub fn combo(&self, label: &str, items: &[&str], selected: Option<u32>) -> gui::ComboBox {
-        let y = self.take(ROW_H);
-        self.side_label(label, y);
-        gui::ComboBox::new(&self.wnd, gui::ComboBoxOpts {
-            position: gui::dpi(MARGIN + LABEL_W, y),
-            width: gui::dpi_x(self.content_width() - LABEL_W),
-            items,
-            selected_item: selected,
-            ..Default::default()
-        })
+        self.column().combo(label, items, selected)
     }
 
     /// Single-selection list box with its label above.
     pub fn list_box(&self, label: &str, items: &[&str], height: i32) -> gui::ListBox {
-        self.top_label(label);
-        let y = self.take(height);
-        gui::ListBox::new(&self.wnd, gui::ListBoxOpts {
-            position: gui::dpi(MARGIN, y),
-            size: gui::dpi(self.content_width(), height),
-            items,
-            ..Default::default()
-        })
+        self.column().list_box(label, items, height)
     }
 
     /// Report-view list with columns `(title, width)` and its label above.
     pub fn list_view(&self, label: &str, columns: &[(&str, i32)], height: i32) -> gui::ListView {
-        self.top_label(label);
-        let y = self.take(height);
-        gui::ListView::new(&self.wnd, gui::ListViewOpts {
-            position: gui::dpi(MARGIN, y),
-            size: gui::dpi(self.content_width(), height),
-            columns,
-            control_style: co::LVS::REPORT | co::LVS::SHOWSELALWAYS | co::LVS::SINGLESEL,
-            control_ex_style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
-            ..Default::default()
-        })
+        self.column().list_view(label, columns, height)
     }
 
     /// Slider with a label on its left.
     pub fn trackbar(&self, label: &str, min: u32, max: u32, value: u32) -> gui::Trackbar {
-        let y = self.take(ROW_H + 6);
-        self.side_label(label, y);
-        gui::Trackbar::new(&self.wnd, gui::TrackbarOpts {
-            position: gui::dpi(MARGIN + LABEL_W, y),
-            size: gui::dpi(self.content_width() - LABEL_W, ROW_H + 6),
-            range: (min, max),
-            value,
-            ..Default::default()
-        })
+        self.column().trackbar(label, min, max, value)
     }
 
     /// A row of push buttons, right-aligned. Returns them in order.
@@ -351,11 +265,6 @@ impl<P: GuiParent + Clone + 'static> Column<P> {
         top
     }
 
-    /// The y the next row starts at.
-    pub fn y(&self) -> i32 {
-        self.y.get()
-    }
-
     pub fn parent(&self) -> &P {
         &self.parent
     }
@@ -452,6 +361,45 @@ impl<P: GuiParent + Clone + 'static> Column<P> {
             height: gui::dpi_y(height),
             control_style: co::ES::MULTILINE | co::ES::WANTRETURN | co::ES::AUTOVSCROLL | co::ES::NOHIDESEL | ro,
             window_style: co::WS::CHILD | co::WS::VISIBLE | co::WS::TABSTOP | co::WS::GROUP | co::WS::VSCROLL,
+            ..Default::default()
+        })
+    }
+
+    /// Single-selection list box with its label above.
+    pub fn list_box(&self, label: &str, items: &[&str], height: i32) -> gui::ListBox {
+        self.top_label(label);
+        let y = self.take(height);
+        gui::ListBox::new(&self.parent, gui::ListBoxOpts {
+            position: gui::dpi(self.x, y),
+            size: gui::dpi(self.width, height),
+            items,
+            ..Default::default()
+        })
+    }
+
+    /// Report-view list with columns `(title, width)` and its label above.
+    pub fn list_view(&self, label: &str, columns: &[(&str, i32)], height: i32) -> gui::ListView {
+        self.top_label(label);
+        let y = self.take(height);
+        gui::ListView::new(&self.parent, gui::ListViewOpts {
+            position: gui::dpi(self.x, y),
+            size: gui::dpi(self.width, height),
+            columns,
+            control_style: co::LVS::REPORT | co::LVS::SHOWSELALWAYS | co::LVS::SINGLESEL,
+            control_ex_style: co::LVS_EX::FULLROWSELECT | co::LVS_EX::DOUBLEBUFFER,
+            ..Default::default()
+        })
+    }
+
+    /// Slider with a label on its left.
+    pub fn trackbar(&self, label: &str, min: u32, max: u32, value: u32) -> gui::Trackbar {
+        let y = self.take(ROW_H + 6);
+        self.side_label(label, y);
+        gui::Trackbar::new(&self.parent, gui::TrackbarOpts {
+            position: gui::dpi(self.x + LABEL_W, y),
+            size: gui::dpi(self.width - LABEL_W, ROW_H + 6),
+            range: (min, max),
+            value,
             ..Default::default()
         })
     }
