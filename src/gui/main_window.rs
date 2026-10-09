@@ -648,7 +648,6 @@ impl MainWindow {
 
     fn on_create(&self) {
         let ui = &self.0;
-        crate::speech::set_main_window(self.hwnd().ptr() as isize);
         ui.toc.name_control();
         ui.find.name_controls();
         ui.progress.name_control();

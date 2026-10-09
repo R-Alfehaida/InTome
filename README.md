@@ -6,14 +6,14 @@ The full feature and shortcut guide is in [resources/user_guide.md](resources/us
 
 ## Build and run
 
-You need Windows 10 or 11, Rust (stable, MSVC toolchain), and the Visual Studio C++ build tools.
+You need Windows 10 or 11, Rust (stable, MSVC toolchain), the Visual Studio C++ build tools with a C++23 compiler, and CMake 3.24 or newer on PATH. The build compiles the prism speech library from source (through the `prismer` crate) and links it into the exe.
 
 ```
 cargo build --release
 target\release\intome.exe [file]
 ```
 
-The build copies `pdfium.dll` (the PDF engine) and `nvdaControllerClient64.dll` (NVDA speech) from `vendor/` next to the exe. Keep them together when you move the program.
+The build copies `pdfium.dll` (the PDF engine) from `vendor/` next to the exe. Keep them together when you move the program.
 
 Settings, logs, the document cache and the annotations database are stored in `%APPDATA%\InTome\`.
 
@@ -31,7 +31,7 @@ InTome works without these. When a tool is missing, the feature that needs it is
 
 ## Screen readers
 
-InTome speaks through NVDA directly and through JAWS. Narrator and other screen readers get UI Automation notifications. Every control is a native Win32 control with an accessible name.
+InTome speaks and brailles through [prism](https://github.com/ethindp/prism) (the `prismer` crate). Prism uses a running screen reader (NVDA, JAWS, ZDSR, Narrator through UI Automation and others) and falls back to a Windows voice (OneCore, then SAPI) when none is running. Every control is a native Win32 control with an accessible name.
 
 `scripts/uia_audit.ps1 -WindowTitle "<title>"` checks a window the way NVDA and JAWS see it. It fails if any focusable control has no name.
 

@@ -21,7 +21,7 @@ paths (`%APPDATA%\InTome`), the user guide. Code identifiers drop the prefix.
 | configobj INI | `config` (serde + TOML) | `config::get()` snapshot, `config::update("section.key", \|s\| ...)`. |
 | diskcache | `document::cache` (SQLite KV, expiry, size cap) | |
 | SQLAlchemy | `rusqlite` | |
-| accessible_output2 | `speech` over bundled `nvdaControllerClient64.dll`, JAWS COM, UIA notifications | |
+| accessible_output2 | `speech` over the `prismer` crate (prism, statically linked) | Prism picks NVDA, JAWS and other screen readers, UIA for Narrator, else a OneCore/SAPI voice. |
 | comtypes / ctypes | `windows` crate | |
 | google-genai | `ureq` + `serde_json` against the Gemini REST API | Same model IDs and prompts. |
 | PyMuPDF | `pdfium-render` (bundled `vendor/pdfium.dll`, chromium/7881) + `lopdf` | lopdf writes what pdfium cannot (`/TU` labels, choice values). |

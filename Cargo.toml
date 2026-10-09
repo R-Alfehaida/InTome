@@ -30,6 +30,9 @@ tempfile = "3"
 ureq = { version = "3", features = ["json"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 
+# Screen-reader and speech output (prism, built from source with CMake and linked statically)
+prismer = { version = "0.1.4", features = ["static"] }
+
 # Document formats
 pdfium-render = "0.9"
 lopdf = "0.45"

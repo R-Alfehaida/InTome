@@ -7,7 +7,7 @@ fn main() {
         println!("cargo:rustc-link-arg-{target}=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
     }
 
-    // Copy runtime assets (pdfium.dll, screen-reader DLLs, user guide) next to the exe.
+    // Copy runtime assets (pdfium.dll, user guide) next to the exe.
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let profile_dir = out.ancestors().nth(3).unwrap().to_path_buf();
     for dir in ["vendor", "resources"] {
