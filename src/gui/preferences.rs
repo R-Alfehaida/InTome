@@ -8,6 +8,7 @@
 use winsafe::{self as w, co, gui, msg, prelude::*};
 
 use crate::annotation::AnnotationManager;
+use crate::ai::client::{GeminiClient, is_tts_model};
 use crate::config::{self, GeminiMode, OcrBackend, PdfReadingMode, Settings};
 use crate::document::cache;
 use crate::events;
@@ -229,14 +230,24 @@ fn gemini(p: &Page, cfg: &Settings) -> Save {
     // The API key lives on the AI Providers page; this page is models, mode and limits only.
     let g = &cfg.gemini;
     let mode = p.combo("Default mode:", &["Accuracy", "Speed"], Some((g.default_mode == GeminiMode::Speed) as u32));
-    let accuracy = p.edit("Accuracy model:", &g.accuracy_model, co::ES::NoValue);
-    let speed = p.edit("Speed model:", &g.speed_model, co::ES::NoValue);
-    let fallback = p.edit("Fallback model:", &g.default_model, co::ES::NoValue);
-    let tts_model = p.edit("TTS model:", &g.tts_model, co::ES::NoValue);
+    let accuracy = p.editable_combo("Accuracy model:", &g.accuracy_model);
+    let speed = p.editable_combo("Speed model:", &g.speed_model);
+    let fallback = p.editable_combo("Fallback model:", &g.default_model);
+    let tts_model = p.editable_combo("TTS model:", &g.tts_model);
     let (concurrent_default, timeout_default) = (g.max_concurrent_pages, g.timeout_seconds as u32);
     let concurrent = p.spin("Max concurrent pages:", concurrent_default, 1, 10);
     let timeout = p.spin("Timeout (s):", timeout_default, 10, 300);
-    let text = |e: &gui::Edit| e.text().unwrap_or_default().trim().to_string();
+    let combos = [&accuracy, &speed, &fallback, &tts_model].map(|c| c.clone());
+    p.parent().on().wm_create(move |_| {
+        // Raw handles cross to the worker: the controls themselves are UI-thread only.
+        let hwnds = combos.each_ref().map(|c| c.hwnd().ptr() as isize);
+        std::thread::spawn(move || match GeminiClient::new().and_then(|c| c.list_models()) {
+            Ok(models) => events::run_on_ui(move || fill_models(hwnds, &models)),
+            Err(e) => log::info!("Gemini model list unavailable: {e:#}"),
+        });
+        Ok(0)
+    });
+    let text = |c: &gui::ComboBox| c.hwnd().GetWindowText().unwrap_or_default().trim().to_string();
     Box::new(move |s| {
         s.gemini.default_mode = if mode.items().selected_index() == Some(1) { GeminiMode::Speed } else { GeminiMode::Accuracy };
         s.gemini.accuracy_model = text(&accuracy);
@@ -246,6 +257,25 @@ fn gemini(p: &Page, cfg: &Settings) -> Save {
         s.gemini.max_concurrent_pages = spin_value(&concurrent, 1, 10, concurrent_default);
         s.gemini.timeout_seconds = spin_value(&timeout, 10, 300, timeout_default) as u64;
     })
+}
+
+/// Fills the accuracy, speed and fallback drop-downs with text models and the last (TTS)
+/// with TTS models, keeping what each one shows. Skipped if Preferences already closed.
+fn fill_models(hwnds: [isize; 4], models: &[String]) {
+    for (i, ptr) in hwnds.into_iter().enumerate() {
+        let combo = unsafe { w::HWND::from_ptr(ptr as _) };
+        if !combo.IsWindow() {
+            return;
+        }
+        let current = combo.GetWindowText().unwrap_or_default();
+        unsafe {
+            combo.SendMessage(msg::CbResetContent {});
+            for m in models.iter().filter(|m| is_tts_model(m) == (i == 3)) {
+                let _ = combo.SendMessage(msg::CbAddString { text: w::WString::from_str(m) });
+            }
+        }
+        let _ = combo.SetWindowText(&current);
+    }
 }
 
 fn ocr(p: &Page, cfg: &Settings) -> Save {

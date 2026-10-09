@@ -267,6 +267,31 @@ impl GeminiClient {
         Ok(serde_json::from_str(&strip_code_fence(&text))?)
     }
 
+    /// Every model this key can call with `generateContent`, sorted, without the `models/` prefix.
+    pub fn list_models(&self) -> anyhow::Result<Vec<String>> {
+        let mut names = Vec::new();
+        let mut token = String::new();
+        loop {
+            let mut req = self.agent.get(API_BASE).header("x-goog-api-key", &self.api_key).query("pageSize", "1000");
+            if !token.is_empty() {
+                req = req.query("pageToken", &token);
+            }
+            let mut resp = req.call()?;
+            let text = resp.body_mut().read_to_string()?;
+            if !resp.status().is_success() {
+                bail!("{} {text}", resp.status());
+            }
+            let page: Value = serde_json::from_str(&text)?;
+            names.extend(generate_content_models(&page));
+            match page["nextPageToken"].as_str() {
+                Some(t) if !t.is_empty() => token = t.to_string(),
+                _ => break,
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
     /// Text to raw PCM (24 kHz, 16-bit, mono).
     pub fn generate_audio(&self, text: &str, voice: &str, model: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<u8>> {
         let body = audio_request(text, voice);
@@ -299,9 +324,39 @@ impl GeminiClient {
     }
 }
 
+/// Names of the models in one `models.list` page that support `generateContent`.
+fn generate_content_models(page: &Value) -> Vec<String> {
+    let models = page["models"].as_array().map(Vec::as_slice).unwrap_or_default();
+    models
+        .iter()
+        .filter(|m| m["supportedGenerationMethods"].as_array().is_some_and(|a| a.iter().any(|v| v == "generateContent")))
+        .filter_map(|m| m["name"].as_str())
+        .map(|n| n.trim_start_matches("models/").to_string())
+        .collect()
+}
+
+/// Whether `model` speaks rather than writes. The API has no field for this, so it goes by
+/// Google's naming. shortcut: relies on "tts" in the name, revisit if Google renames TTS models.
+pub fn is_tts_model(model: &str) -> bool {
+    model.contains("tts")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_list_keeps_generate_content_models_without_prefix() {
+        let page = json!({"models": [
+            {"name": "models/gemini-3.5-flash", "supportedGenerationMethods": ["generateContent", "countTokens"]},
+            {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+            {"name": "models/gemini-3.1-flash-tts-preview", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/no-methods"}
+        ]});
+        assert_eq!(generate_content_models(&page), ["gemini-3.5-flash", "gemini-3.1-flash-tts-preview"]);
+        assert_eq!(generate_content_models(&json!({})), Vec::<String>::new());
+        assert!(is_tts_model("gemini-3.1-flash-tts-preview") && !is_tts_model("gemini-3.5-flash"));
+    }
 
     #[test]
     fn retry_decision_follows_prism_error_matching() {

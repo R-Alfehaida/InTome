@@ -353,6 +353,22 @@ impl<P: GuiParent + Clone + 'static> Column<P> {
         })
     }
 
+    /// Drop-down that also takes typed text, starting with `value` as its only item.
+    /// Read it with `hwnd().GetWindowText()`, which gives the typed or picked text.
+    pub fn editable_combo(&self, label: &str, value: &str) -> gui::ComboBox {
+        let y = self.take(ROW_H);
+        self.side_label(label, y);
+        let items: &[&str] = if value.is_empty() { &[] } else { &[value] };
+        gui::ComboBox::new(&self.parent, gui::ComboBoxOpts {
+            position: gui::dpi(self.x + LABEL_W, y),
+            width: gui::dpi_x(self.width - LABEL_W),
+            items,
+            selected_item: (!value.is_empty()).then_some(0),
+            control_style: co::CBS::DROPDOWN | co::CBS::AUTOHSCROLL,
+            ..Default::default()
+        })
+    }
+
     /// Multi-line edit with its label above.
     pub fn multiline(&self, label: &str, value: &str, height: i32, read_only: bool) -> gui::Edit {
         self.top_label(label);
