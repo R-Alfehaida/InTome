@@ -117,6 +117,15 @@ fn plural(types: &[ElementType]) -> &'static str {
     }
 }
 
+/// The page as the reading control shows it: ending in a line break, as
+/// Prism's pages do. Down on the last line then has an empty line to move to,
+/// which is the end of the page; without it the caret cannot reach the end by
+/// arrowing and continuous reading never turns the page. Offsets into the
+/// page text are unchanged.
+fn shown_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.ends_with(['\n', '\r']) { text.into() } else { format!("{text}\n").into() }
+}
+
 /// "Heading 2: Introduction", the element's text cut at 80 chars.
 pub fn element_announcement(e: &SemanticElement) -> String {
     format!("{}: {}", e.element_type.label(), e.text.chars().take(80).collect::<String>())
@@ -132,9 +141,10 @@ pub struct ContentView {
     doc: RefCell<Box<dyn Document>>,
     page: Cell<usize>,
     search: RefCell<SearchEngine>,
-    /// True while continuous reading turns the page. Guards the re-entrant
-    /// selection event of the post-turn caret reset, and tells the main window
-    /// not to speak the page number over the screen reader's say-all.
+    /// True while the page turns without its spoken page number: a continuous
+    /// reading turn (the screen reader's say-all is speaking) or a jump that
+    /// announces its own message. Guards the re-entrant selection event of the
+    /// post-turn caret reset, and tells the main window to stay silent.
     advancing: Cell<bool>,
     end_announced: Cell<bool>,
     /// A single end-of-page boundary can raise several caret events as say-all
@@ -215,7 +225,7 @@ impl ContentView {
 
     pub fn show_current_page(&self) {
         self.end_announced.set(false);
-        self.edit.set_text(&self.current_text());
+        self.edit.set_text(&shown_text(&self.current_text()));
         self.edit.set_selection(0, 0);
         events::emit(AppEvent::PageChanged { page_num: self.page.get() + 1, page_count: self.page_count() });
     }
@@ -227,6 +237,16 @@ impl ContentView {
         self.page.set(index);
         self.show_current_page();
         true
+    }
+
+    /// [`Self::go_to_page`] without the spoken page number, for a turn whose
+    /// caller announces its own message: two interrupting announcements in a
+    /// row cut the first off after a syllable.
+    fn go_to_page_quietly(&self, index: usize) -> bool {
+        self.advancing.set(true);
+        let turned = self.go_to_page(index);
+        self.advancing.set(false);
+        turned
     }
 
     pub fn next_page(&self) -> bool {
@@ -314,7 +334,7 @@ impl ContentView {
         if !config::get().general.continuous_reading || self.advancing.get() || cp_min != cp_max {
             return;
         }
-        if cp_max < offset_len(&self.current_text()) {
+        if cp_max < offset_len(&shown_text(&self.current_text())) {
             return;
         }
         if self.last_turn.get().is_some_and(|t| t.elapsed() <= Duration::from_millis(750)) {
@@ -376,7 +396,7 @@ impl ContentView {
             KeyAction::PrevSection => self.prev_section(),
             KeyAction::SectionStart => match self.with_doc(|d| find_section_bounds(d, self.page.get())) {
                 Some((start, _)) => {
-                    self.go_to_page(start);
+                    self.go_to_page_quietly(start);
                     events::announce(format!("Start of section, page {}", start + 1));
                 }
                 None => {
@@ -385,7 +405,7 @@ impl ContentView {
             },
             KeyAction::SectionEnd => match self.with_doc(|d| find_section_bounds(d, self.page.get())) {
                 Some((_, end)) => {
-                    self.go_to_page(end);
+                    self.go_to_page_quietly(end);
                     events::announce(format!("End of section, page {}", end + 1));
                 }
                 None => self.go_to_end(),
@@ -410,7 +430,7 @@ impl ContentView {
     /// `navigation.highlight_on_navigate` is on, and announces it.
     pub fn go_to_element(&self, page_index: usize, element: &SemanticElement) {
         if page_index != self.page.get() {
-            self.go_to_page(page_index);
+            self.go_to_page_quietly(page_index);
         }
         let end = if config::get().navigation.highlight_on_navigate { element.end_pos } else { element.start_pos };
         self.select(element.start_pos, end);
@@ -425,7 +445,7 @@ impl ContentView {
         }
         match toc.iter().find(|e| e.page_index > self.page.get()) {
             Some(e) => {
-                self.go_to_page(e.page_index);
+                self.go_to_page_quietly(e.page_index);
                 events::announce(format!("Section: {}", e.title));
             }
             None => events::announce("Last section"),
@@ -439,7 +459,7 @@ impl ContentView {
         }
         match toc.iter().rev().find(|e| e.page_index < self.page.get()) {
             Some(e) => {
-                self.go_to_page(e.page_index);
+                self.go_to_page_quietly(e.page_index);
                 events::announce(format!("Section: {}", e.title));
             }
             None => events::announce("First section"),
@@ -475,7 +495,7 @@ impl ContentView {
             return false;
         };
         if m.page_index != self.page.get() {
-            self.go_to_page(m.page_index);
+            self.go_to_page_quietly(m.page_index);
         }
         self.select(m.start_pos, m.end_pos);
         self.focus();
@@ -570,6 +590,13 @@ mod tests {
         assert_eq!(key_action(key(b'3' as u16, false, false, false), false), Some(KeyAction::Element { types: vec![ElementType::Heading3], reverse: false }));
         assert_eq!(key_action(key(b'K' as u16, true, false, false), false), None); // Ctrl+K is not a reading key
         assert_eq!(key_action(key(b'Z' as u16, false, false, false), false), None);
+    }
+
+    #[test]
+    fn shown_page_always_ends_in_a_line_break() {
+        assert_eq!(shown_text("Part One. "), "Part One. \n");
+        assert_eq!(shown_text("quiet old.\n\n"), "quiet old.\n\n");
+        assert_eq!(shown_text(""), "\n");
     }
 
     #[test]
