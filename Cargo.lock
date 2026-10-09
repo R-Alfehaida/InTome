@@ -1457,6 +1457,7 @@ dependencies = [
  "regex",
  "rtf-parser",
  "rusqlite",
+ "rustybuzz",
  "scraper",
  "serde",
  "serde_json",
