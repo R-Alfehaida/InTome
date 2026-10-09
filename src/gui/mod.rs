@@ -6,3 +6,7 @@ pub mod export_dialog;
 pub mod preferences;
 
 pub fn run() {}
+pub mod annotation_dialogs;
+pub mod form_dialog;
+pub mod updater_ui;
+pub mod voice_profiles;
