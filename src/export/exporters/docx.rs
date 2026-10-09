@@ -19,6 +19,7 @@ const HEADING_SIZES: [usize; 6] = [32, 26, 24, 22, 22, 22];
 
 fn styles() -> Vec<Style> {
     let mut out = vec![
+        Style::new("Normal", StyleType::Paragraph).name("Normal"),
         Style::new("Title", StyleType::Paragraph).name("Title").based_on("Normal").next("Normal").size(52).bold(),
         Style::new("Subtitle", StyleType::Paragraph).name("Subtitle").based_on("Normal").next("Normal").size(28).italic(),
         Style::new("Quote", StyleType::Paragraph)
@@ -57,7 +58,7 @@ fn run_of(text: &str) -> Run {
 }
 
 fn plain(text: &str) -> Paragraph {
-    Paragraph::new().add_run(run_of(text))
+    Paragraph::new().add_run(run_of(text)).style("Normal")
 }
 
 impl Exporter for DocxExporter {
@@ -116,7 +117,7 @@ impl Exporter for DocxExporter {
                 }
             }
             if i + 1 < page_count {
-                docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_break(BreakType::Page)));
+                docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_break(BreakType::Page)).style("Normal"));
             }
             progress(i + 1, page_count, &format!("Page {}", i + 1));
         }
