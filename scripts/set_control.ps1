@@ -1,14 +1,16 @@
 # Data entry for UI checks: finds a control in a top-level window by its MSAA
 # name and sets it the way a user's input would leave it.
 #   -Text sets an edit's text (WM_SETTEXT); -Check 1/0 sets a check box (BM_SETCHECK);
-#   -Select picks a combo box or list box entry by its text (CB_/LB_SELECTSTRING).
+#   -Select picks a combo box or list box entry by its text (CB_/LB_SELECTSTRING);
+#   -Click posts the button's click command, so it works without the foreground.
 # Prints the control's class and name, or FAIL.
 param(
     [Parameter(Mandatory)][string]$WindowTitle,
     [Parameter(Mandatory)][string]$Name,
     [string]$Text,
     [int]$Check = -1,
-    [string]$Select
+    [string]$Select,
+    [switch]$Click
 )
 Add-Type -ReferencedAssemblies Accessibility -TypeDefinition @'
 using System; using System.Runtime.InteropServices; using System.Text; using Accessibility;
@@ -19,6 +21,11 @@ public static class SetCtl {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, uint m, IntPtr w, string l);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr h);
+  [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr h);
+  // WM_COMMAND/BN_CLICKED to the parent: BM_CLICK fails while the dialog is not the active window.
+  public static void Click(IntPtr h) { PostMessageW(GetParent(h), 0x0111, (IntPtr)(GetDlgCtrlID(h) & 0xFFFF), h); }
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object o);
   public static IntPtr Top(string t) { return FindWindowW(null, t); }
   public static string Cls(IntPtr h) { var c = new StringBuilder(128); GetClassNameW(h, c, 128); return c.ToString(); }
@@ -49,4 +56,6 @@ if ($Select) {
     $r = [SetCtl]::SendMessageW($h, $msg, [IntPtr](-1), $Select)
     if ([int64]$r -lt 0) { Write-Output "FAIL: '$Select' not in '$Name'"; exit 1 }
 }
+# Posted: a click that opens a modal dialog would block a sent message until it closes.
+if ($Click) { [SetCtl]::Click($h) }
 Write-Output "ok  $cls '$Name'"
