@@ -52,6 +52,7 @@ unrar = "0.5"
 krilla = "0.8"
 docx-rs = "0.4"
 epub-builder = "0.8"
+rustybuzz = "0.20"
 
 # Windows
 winsafe = { version = "0.0.29", features = ["gui", "shell", "advapi", "ole", "oleaut", "winmm", "comctl", "gdi", "user", "kernel", "version"] }
