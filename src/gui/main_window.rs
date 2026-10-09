@@ -511,7 +511,11 @@ impl MainWindow {
             let focus = w::HWND::GetFocus();
             if focus.as_ref() == Some(m.0.toc.tree.hwnd()) {
                 if let (Some(page), Some(v)) = (m.0.toc.selected_page(), m.active_view()) {
-                    v.go_to_page(page);
+                    // Arrowing in the tree already turned there; turning again
+                    // would repeat the page number just to have focus cut it off.
+                    if page != v.current_page() {
+                        v.go_to_page(page);
+                    }
                     v.focus();
                 }
             } else if m.0.find.is_shown() && focus.is_some_and(|f| m.0.find.contains(&f)) {

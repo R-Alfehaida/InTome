@@ -141,9 +141,10 @@ pub struct ContentView {
     doc: RefCell<Box<dyn Document>>,
     page: Cell<usize>,
     search: RefCell<SearchEngine>,
-    /// True while continuous reading turns the page. Guards the re-entrant
-    /// selection event of the post-turn caret reset, and tells the main window
-    /// not to speak the page number over the screen reader's say-all.
+    /// True while the page turns without its spoken page number: a continuous
+    /// reading turn (the screen reader's say-all is speaking) or a jump that
+    /// announces its own message. Guards the re-entrant selection event of the
+    /// post-turn caret reset, and tells the main window to stay silent.
     advancing: Cell<bool>,
     end_announced: Cell<bool>,
     /// A single end-of-page boundary can raise several caret events as say-all
@@ -236,6 +237,16 @@ impl ContentView {
         self.page.set(index);
         self.show_current_page();
         true
+    }
+
+    /// [`Self::go_to_page`] without the spoken page number, for a turn whose
+    /// caller announces its own message: two interrupting announcements in a
+    /// row cut the first off after a syllable.
+    fn go_to_page_quietly(&self, index: usize) -> bool {
+        self.advancing.set(true);
+        let turned = self.go_to_page(index);
+        self.advancing.set(false);
+        turned
     }
 
     pub fn next_page(&self) -> bool {
@@ -385,7 +396,7 @@ impl ContentView {
             KeyAction::PrevSection => self.prev_section(),
             KeyAction::SectionStart => match self.with_doc(|d| find_section_bounds(d, self.page.get())) {
                 Some((start, _)) => {
-                    self.go_to_page(start);
+                    self.go_to_page_quietly(start);
                     events::announce(format!("Start of section, page {}", start + 1));
                 }
                 None => {
@@ -394,7 +405,7 @@ impl ContentView {
             },
             KeyAction::SectionEnd => match self.with_doc(|d| find_section_bounds(d, self.page.get())) {
                 Some((_, end)) => {
-                    self.go_to_page(end);
+                    self.go_to_page_quietly(end);
                     events::announce(format!("End of section, page {}", end + 1));
                 }
                 None => self.go_to_end(),
@@ -419,7 +430,7 @@ impl ContentView {
     /// `navigation.highlight_on_navigate` is on, and announces it.
     pub fn go_to_element(&self, page_index: usize, element: &SemanticElement) {
         if page_index != self.page.get() {
-            self.go_to_page(page_index);
+            self.go_to_page_quietly(page_index);
         }
         let end = if config::get().navigation.highlight_on_navigate { element.end_pos } else { element.start_pos };
         self.select(element.start_pos, end);
@@ -434,7 +445,7 @@ impl ContentView {
         }
         match toc.iter().find(|e| e.page_index > self.page.get()) {
             Some(e) => {
-                self.go_to_page(e.page_index);
+                self.go_to_page_quietly(e.page_index);
                 events::announce(format!("Section: {}", e.title));
             }
             None => events::announce("Last section"),
@@ -448,7 +459,7 @@ impl ContentView {
         }
         match toc.iter().rev().find(|e| e.page_index < self.page.get()) {
             Some(e) => {
-                self.go_to_page(e.page_index);
+                self.go_to_page_quietly(e.page_index);
                 events::announce(format!("Section: {}", e.title));
             }
             None => events::announce("First section"),
@@ -484,7 +495,7 @@ impl ContentView {
             return false;
         };
         if m.page_index != self.page.get() {
-            self.go_to_page(m.page_index);
+            self.go_to_page_quietly(m.page_index);
         }
         self.select(m.start_pos, m.end_pos);
         self.focus();

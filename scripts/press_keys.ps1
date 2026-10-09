@@ -1,4 +1,4 @@
-﻿# Brings a top-level window to the foreground and presses real keys through
+# Brings a top-level window to the foreground and presses real keys through
 # SendInput (WScript SendKeys drops arrow keys in some sessions).
 # Keys: comma-separated chords such as "down,down,tab,shift+tab,alt+up,space,enter,esc,a".
 param([Parameter(Mandatory)][string]$WindowTitle, [Parameter(Mandatory)][string]$Keys, [int]$DelayMs = 120)

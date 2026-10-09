@@ -1,4 +1,4 @@
-﻿# Opens a document in Prism or InTome under NVDA, runs a key sequence, and
+# Opens a document in Prism or InTome under NVDA, runs a key sequence, and
 # prints what NVDA spoke for each step, in order (see nvda_speech_capture.ps1).
 #
 #   nvda_scenario.ps1 -App intome -Doc tests\fixtures\text_toc.pdf -Steps "pagedown;pagedown,pagedown@2500"
