@@ -117,6 +117,15 @@ fn plural(types: &[ElementType]) -> &'static str {
     }
 }
 
+/// The page as the reading control shows it: ending in a line break, as
+/// Prism's pages do. Down on the last line then has an empty line to move to,
+/// which is the end of the page; without it the caret cannot reach the end by
+/// arrowing and continuous reading never turns the page. Offsets into the
+/// page text are unchanged.
+fn shown_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.ends_with(['\n', '\r']) { text.into() } else { format!("{text}\n").into() }
+}
+
 /// "Heading 2: Introduction", the element's text cut at 80 chars.
 pub fn element_announcement(e: &SemanticElement) -> String {
     format!("{}: {}", e.element_type.label(), e.text.chars().take(80).collect::<String>())
@@ -215,7 +224,7 @@ impl ContentView {
 
     pub fn show_current_page(&self) {
         self.end_announced.set(false);
-        self.edit.set_text(&self.current_text());
+        self.edit.set_text(&shown_text(&self.current_text()));
         self.edit.set_selection(0, 0);
         events::emit(AppEvent::PageChanged { page_num: self.page.get() + 1, page_count: self.page_count() });
     }
@@ -314,7 +323,7 @@ impl ContentView {
         if !config::get().general.continuous_reading || self.advancing.get() || cp_min != cp_max {
             return;
         }
-        if cp_max < offset_len(&self.current_text()) {
+        if cp_max < offset_len(&shown_text(&self.current_text())) {
             return;
         }
         if self.last_turn.get().is_some_and(|t| t.elapsed() <= Duration::from_millis(750)) {
@@ -570,6 +579,13 @@ mod tests {
         assert_eq!(key_action(key(b'3' as u16, false, false, false), false), Some(KeyAction::Element { types: vec![ElementType::Heading3], reverse: false }));
         assert_eq!(key_action(key(b'K' as u16, true, false, false), false), None); // Ctrl+K is not a reading key
         assert_eq!(key_action(key(b'Z' as u16, false, false, false), false), None);
+    }
+
+    #[test]
+    fn shown_page_always_ends_in_a_line_break() {
+        assert_eq!(shown_text("Part One. "), "Part One. \n");
+        assert_eq!(shown_text("quiet old.\n\n"), "quiet old.\n\n");
+        assert_eq!(shown_text(""), "\n");
     }
 
     #[test]
