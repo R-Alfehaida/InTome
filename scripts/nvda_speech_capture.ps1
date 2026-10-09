@@ -23,7 +23,11 @@
 param([switch]$Mark, [string]$Text = 'capture mark', [switch]$Dump, [switch]$Close)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
-$dll = (Resolve-Path (Join-Path $PSScriptRoot '..\vendor\nvdaControllerClient64.dll')).Path
+# InTome speaks through prism and no longer ships this DLL; the markers borrow
+# the copy in Prism's virtual environment (override with $env:NVDA_CLIENT_DLL).
+$dll = if ($env:NVDA_CLIENT_DLL) { $env:NVDA_CLIENT_DLL } else {
+    'C:\Users\khais\Documents\GitHub\Prism-Document-Reader\.venv\Lib\site-packages\accessible_output2\lib\nvdaControllerClient64.dll' }
+if (-not (Test-Path $dll)) { throw "nvdaControllerClient64.dll not found at $dll; set NVDA_CLIENT_DLL" }
 Add-Type -TypeDefinition @"
 using System; using System.Runtime.InteropServices;
 public static class NvdaCap {
