@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description>
+  <title-info>
+    <genre>prose</genre>
+    <author><first-name>Ada</first-name><middle-name>M.</middle-name><last-name>Reader</last-name></author>
+    <book-title>The Quiet Library</book-title>
+    <annotation><p>A short story about reading rooms.</p></annotation>
+    <lang>en</lang>
+  </title-info>
+  <document-info><author><nickname>scanner</nickname></author></document-info>
+</description>
+<body>
+  <title><p>The Quiet Library</p><p>A Novella</p></title>
+  <epigraph><p>A library is not a luxury but one of the necessities of life.</p><text-author>Henry Ward Beecher</text-author></epigraph>
+  <section>
+    <title><p>Part One: Arrival</p></title>
+    <section>
+      <title><p>Chapter 1</p></title>
+      <p>The train reached the town at dusk. Mara carried one suitcase and a <emphasis>very</emphasis> old letter, folded twice and softened by years in a coat pocket.</p>
+      <p>The library stood at the end of Mill Street. Its windows were lit, and a hand-lettered sign on the door asked visitors to keep their voices low &amp; their footsteps lighter.</p>
+      <empty-line/>
+      <p>Inside, the reading room held two hundred desks. Each had a green lamp. Nobody looked up when she entered, and she liked that more than she expected to.</p>
+      <poem>
+        <title><p>Notice on the wall</p></title>
+        <stanza><v>Please whisper here,</v><v>the books are sleeping near,</v><v>and dreams are made of pages.</v></stanza>
+      </poem>
+    </section>
+    <section>
+      <title><p>Chapter 2</p></title>
+      <p>The librarian, a tall woman named Ines, showed her to a desk by the window. "You may stay as long as the lamp stays lit," she said, and went back to her cart of returned books.</p>
+      <p>Mara opened the letter again. The handwriting was her grandmother's, and it began with a single line: <strong>Look in the third drawer.</strong></p>
+      <p>She looked. The third drawer of the catalog cabinet held cards for books that no longer existed, each one annotated in the same careful hand. She read until the lamp went out, and then she read by the window.</p>
+    </section>
+  </section>
+  <section>
+    <title><p>Part Two: The Catalog</p></title>
+    <p>By morning she had counted four hundred and twelve cards. Ines brought tea without being asked and set it down beside the stack. "Those were your grandmother's," she said. "She catalogued the library from memory, one book at a time, after the fire."</p>
+    <p>There was more to tell, but the lamp was lit and the desk was warm, and for the first time in years Mara had nowhere else to be.</p>
+  </section>
+</body>
+</FictionBook>
