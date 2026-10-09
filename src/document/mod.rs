@@ -195,6 +195,50 @@ pub trait Document: Send {
     }
 }
 
+/// A frozen, plain-data copy of a document: every page (including OCR results
+/// already applied), TOC and metadata. Background work such as export takes a
+/// snapshot on the UI thread instead of sharing the live document.
+pub struct SnapshotDocument {
+    path: std::path::PathBuf,
+    capabilities: Capabilities,
+    toc: Vec<TocEntry>,
+    metadata: DocMetadata,
+    pages: Vec<Page>,
+}
+
+impl SnapshotDocument {
+    pub fn of(doc: &mut dyn Document) -> Self {
+        Self {
+            path: doc.path().to_path_buf(),
+            capabilities: doc.capabilities(),
+            toc: doc.toc().to_vec(),
+            metadata: doc.metadata(),
+            pages: (0..doc.page_count()).map(|i| doc.page(i).clone()).collect(),
+        }
+    }
+}
+
+impl Document for SnapshotDocument {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities
+    }
+    fn toc(&self) -> &[TocEntry] {
+        &self.toc
+    }
+    fn metadata(&self) -> DocMetadata {
+        self.metadata.clone()
+    }
+    fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+    fn page(&mut self, index: usize) -> &Page {
+        &self.pages[index]
+    }
+}
+
 /// Case-insensitive search within one page's text; positions are char indices.
 pub fn search_text(page_index: usize, text: &str, query: &str) -> Vec<SearchResult> {
     let q: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
