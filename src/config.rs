@@ -87,6 +87,8 @@ pub struct Gemini {
     pub default_model: String,
     pub speed_model: String,
     pub accuracy_model: String,
+    /// Gemini model for read-aloud and audio export.
+    pub tts_model: String,
     pub default_mode: GeminiMode,
     pub max_concurrent_pages: u32,
     pub timeout_seconds: u64,
@@ -224,6 +226,7 @@ impl Default for Gemini {
             default_model: "gemini-3.1-flash-lite".into(),
             speed_model: "gemini-3.1-flash-lite".into(),
             accuracy_model: "gemini-3.5-flash".into(),
+            tts_model: "gemini-3.1-flash-tts-preview".into(),
             default_mode: GeminiMode::Speed,
             max_concurrent_pages: 3,
             timeout_seconds: 60,

@@ -232,6 +232,7 @@ fn gemini(p: &Page, cfg: &Settings) -> Save {
     let accuracy = p.edit("Accuracy model:", &g.accuracy_model, co::ES::NoValue);
     let speed = p.edit("Speed model:", &g.speed_model, co::ES::NoValue);
     let fallback = p.edit("Fallback model:", &g.default_model, co::ES::NoValue);
+    let tts_model = p.edit("TTS model:", &g.tts_model, co::ES::NoValue);
     let (concurrent_default, timeout_default) = (g.max_concurrent_pages, g.timeout_seconds as u32);
     let concurrent = p.spin("Max concurrent pages:", concurrent_default, 1, 10);
     let timeout = p.spin("Timeout (s):", timeout_default, 10, 300);
@@ -241,6 +242,7 @@ fn gemini(p: &Page, cfg: &Settings) -> Save {
         s.gemini.accuracy_model = text(&accuracy);
         s.gemini.speed_model = text(&speed);
         s.gemini.default_model = text(&fallback);
+        s.gemini.tts_model = text(&tts_model);
         s.gemini.max_concurrent_pages = spin_value(&concurrent, 1, 10, concurrent_default);
         s.gemini.timeout_seconds = spin_value(&timeout, 10, 300, timeout_default) as u64;
     })

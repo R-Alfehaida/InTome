@@ -52,8 +52,6 @@ pub fn get_api_key() -> Option<String> {
     decrypt_api_key(&encrypted).map_err(|_| log::error!("Failed to decrypt API key from config")).ok()
 }
 
-pub const DEFAULT_TTS_MODEL: &str = "gemini-3.1-flash-tts-preview";
-
 /// Output-token cap for OCR. Raised from the original 8192 because a dense
 /// page's tagged OCR output can exceed that and be silently truncated; a
 /// response that still hits the cap is detected and logged.
@@ -400,7 +398,7 @@ mod tests {
     #[test]
     #[ignore = "live Gemini call"]
     fn live_tts_returns_pcm() {
-        let pcm = live_client().generate_audio("Hello from InTome.", "Kore", DEFAULT_TTS_MODEL, None).unwrap();
+        let pcm = live_client().generate_audio("Hello from InTome.", "Kore", &config::get().gemini.tts_model, None).unwrap();
         assert!(pcm.len() > 24_000 && pcm.len() % 2 == 0, "got {} bytes", pcm.len());
         assert_ne!(&pcm[..4], b"RIFF");
         let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ai_scratch/tts.pcm");

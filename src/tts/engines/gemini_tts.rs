@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_PURGE};
 use windows::core::PCWSTR;
 
-use crate::ai::client::{DEFAULT_TTS_MODEL, GeminiClient};
+use crate::ai::client::GeminiClient;
 use crate::cancel::CancelToken;
+use crate::config;
 use crate::tts::engine::{TtsEngine, VoiceInfo};
 
 pub const NAME: &str = "Gemini TTS";
@@ -140,7 +141,7 @@ impl TtsEngine for GeminiTtsEngine {
             ctl.speaking = true;
         }
         let voice = lock(&self.voice).clone();
-        let audio = lock(&self.client).generate_audio(text, &voice, DEFAULT_TTS_MODEL, Some(&self.cancel));
+        let audio = lock(&self.client).generate_audio(text, &voice, &config::get().gemini.tts_model, Some(&self.cancel));
         let result = match audio {
             Ok(pcm) => {
                 self.play(&pcm);

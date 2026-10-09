@@ -4,8 +4,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::ai::client::{DEFAULT_TTS_MODEL, GeminiClient};
+use crate::ai::client::GeminiClient;
 use crate::cancel::CancelToken;
+use crate::config;
 use crate::document::{Document, TocEntry};
 
 /// Gemini TTS quality can drift past a few minutes of continuous audio, so a whole
@@ -229,7 +230,7 @@ pub struct AudioPipeline {
 
 impl Default for AudioPipeline {
     fn default() -> Self {
-        Self { model: DEFAULT_TTS_MODEL.into() }
+        Self { model: config::get().gemini.tts_model }
     }
 }
 
