@@ -13,7 +13,7 @@ cargo build --release
 target\release\intome.exe [file]
 ```
 
-The build copies `pdfium.dll` (the PDF engine) from `vendor/` next to the exe. Keep them together when you move the program.
+The build copies `pdfium.dll` (the PDF engine) from `vendor/` next to the exe. Keep them together when you move the program. The C++ runtime is linked statically, so no Visual C++ redistributable is needed.
 
 Settings, logs, the document cache and the annotations database are stored in `%APPDATA%\InTome\`.
 
