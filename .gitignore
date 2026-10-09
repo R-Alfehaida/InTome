@@ -2,3 +2,4 @@
 *.log
 decisions.local.tsv
 /.claude/
+/dist
