@@ -30,6 +30,7 @@ const ES_READONLY: u32 = 0x800;
 const ES_WANTRETURN: u32 = 0x1000;
 const WM_USER: u32 = 0x400;
 const EM_SCROLLCARET: u32 = 0xB7;
+const EM_LINEINDEX: u32 = 0xBB;
 const EM_EXGETSEL: u32 = WM_USER + 52;
 const EM_EXLIMITTEXT: u32 = WM_USER + 53;
 const EM_EXLINEFROMCHAR: u32 = WM_USER + 54;
@@ -173,6 +174,11 @@ impl RichEdit {
     /// 0-based (wrapped) line holding control offset `offset`.
     pub fn line_from_offset(self, offset: usize) -> usize {
         self.send(EM_EXLINEFROMCHAR, 0, offset as isize).max(0) as usize
+    }
+
+    /// Control offset where (wrapped) line `line` starts.
+    pub fn line_start(self, line: usize) -> usize {
+        self.send(EM_LINEINDEX, line, 0).max(0) as usize
     }
 
     pub fn set_font(self, face: &str, size_pt: u32) {
