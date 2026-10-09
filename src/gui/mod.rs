@@ -34,6 +34,12 @@ fn setup_logging() {
         let config = simplelog::ConfigBuilder::new().add_filter_ignore_str("html5ever").add_filter_ignore_str("selectors").build();
         let _ = simplelog::WriteLogger::init(log::LevelFilter::Debug, config, file);
     }
+    // A panic inside a window procedure aborts with no console to print to;
+    // record it so a "silent" exit leaves a trace in the log.
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("panic: {info}\n{}", std::backtrace::Backtrace::force_capture());
+        log::logger().flush();
+    }));
 }
 
 /// Wraps the window for the event dispatcher, which must be `Sync`. It only
