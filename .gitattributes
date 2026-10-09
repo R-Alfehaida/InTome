@@ -1,0 +1,12 @@
+*.pdf binary
+*.png binary
+*.mobi binary
+*.epub binary
+*.docx binary
+*.pptx binary
+*.odt binary
+*.odp binary
+*.zip binary
+*.rar binary
+*.dll binary
+*.rtf -text
