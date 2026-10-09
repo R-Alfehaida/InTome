@@ -38,7 +38,8 @@ const WM_CHAR: u32 = 0x102;
 const WM_SYSKEYDOWN: u32 = 0x104;
 const WM_GETDLGCODE: u32 = 0x87;
 // Arrows and characters, but not Tab or Escape: those move focus and close the find bar.
-const DLGC_READING: isize = 0x1 | 0x8 | 0x80;
+// No DLGC_HASSETSEL, or tabbing in would select the whole page.
+const DLGC_READING: isize = 0x1 | 0x80;
 
 const VK_PRIOR: u16 = 0x21;
 const VK_NEXT: u16 = 0x22;
