@@ -1,0 +1,95 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /Helv 6 0 R >> >> /Annots [7 0 R 8 0 R 10 0 R 11 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R] >>
+endobj
+4 0 obj
+<< /Fields [7 0 R 8 0 R 9 0 R 11 0 R 12 0 R 16 0 R 17 0 R] /DR << /Font << /Helv 6 0 R >> >> /DA (/Helv 0 Tf 0 g) >>
+endobj
+5 0 obj
+<<  /Length 182 >>
+stream
+BT /Helv 11 Tf 72 712 Td (Full name) Tj 0 -40 Td (Email) Tj 0 -40 Td (City) Tj 0 -40 Td (I agree) Tj 0 -40 Td (Colour: Red Green Blue) Tj 0 -40 Td (Country) Tj 0 -60 Td (Fruit) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Tx /T (name) /TU (Your full name) /DA (/Helv 11 Tf 0 g) /Rect [180 705 400 725] >>
+endobj
+8 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Tx /T (email) /V (old@example.com) /DA (/Helv 11 Tf 0 g) /Rect [180 665 400 685] >>
+endobj
+9 0 obj
+<< /T (addr) /Kids [10 0 R] >>
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /Parent 9 0 R /FT /Tx /T (city) /TU (City of residence) /DA (/Helv 11 Tf 0 g) /Rect [180 625 400 645] >>
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Btn /T (agree) /TU (I agree to the terms) /V /Off /AS /Off /Rect [180 585 194 599] /AP << /N << /Yes 18 0 R /Off 19 0 R >> >> >>
+endobj
+12 0 obj
+<< /FT /Btn /Ff 49152 /T (colour) /TU (Favourite colour) /V /Off /Kids [13 0 R 14 0 R 15 0 R] >>
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /Parent 12 0 R /AS /Off /Rect [250 545 264 559] /AP << /N << /Red 18 0 R /Off 19 0 R >> >> >>
+endobj
+14 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /Parent 12 0 R /AS /Off /Rect [300 545 314 559] /AP << /N << /Green 18 0 R /Off 19 0 R >> >> >>
+endobj
+15 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /Parent 12 0 R /AS /Off /Rect [350 545 364 559] /AP << /N << /Blue 18 0 R /Off 19 0 R >> >> >>
+endobj
+16 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /Ff 131072 /T (country) /Opt [(Malaysia) (Singapore) (Japan)] /V (Malaysia) /DA (/Helv 11 Tf 0 g) /Rect [180 505 400 525] >>
+endobj
+17 0 obj
+<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (fruit) /TU (Pick a fruit) /Opt [[(app) (Apple)] [(ban) (Banana)] [(che) (Cherry)]] /DA (/Helv 11 Tf 0 g) /Rect [180 420 400 470] >>
+endobj
+18 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 14 14] /Length 16 >>
+stream
+0 g 3 3 8 8 re f
+endstream
+endobj
+19 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 14 14] /Length 0 >>
+stream
+
+endstream
+endobj
+xref
+0 20
+0000000000 65535 f 
+0000000015 00000 n 
+0000000080 00000 n 
+0000000137 00000 n 
+0000000336 00000 n 
+0000000468 00000 n 
+0000000702 00000 n 
+0000000799 00000 n 
+0000000949 00000 n 
+0000001100 00000 n 
+0000001146 00000 n 
+0000001314 00000 n 
+0000001511 00000 n 
+0000001624 00000 n 
+0000001781 00000 n 
+0000001940 00000 n 
+0000002098 00000 n 
+0000002294 00000 n 
+0000002501 00000 n 
+0000002616 00000 n 
+trailer
+<< /Size 20 /Root 1 0 R >>
+startxref
+2714
+%%EOF
