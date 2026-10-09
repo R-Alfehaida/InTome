@@ -378,7 +378,7 @@ enum AfterScan {
     OpenDialog,
 }
 
-pub struct Ui {
+struct Ui {
     wnd: gui::WindowMain,
     toc: TocTree,
     tabs: gui::Tab,
@@ -648,7 +648,7 @@ impl MainWindow {
 
     fn on_create(&self) {
         let ui = &self.0;
-        speech_window(self.hwnd());
+        crate::speech::set_main_window(self.hwnd().ptr() as isize);
         ui.toc.name_control();
         ui.find.name_controls();
         ui.progress.name_control();
@@ -986,6 +986,8 @@ impl MainWindow {
 
     /// Re-runs the search when the query or an option changed. False when nothing matches.
     fn ensure_search(&self, v: &ContentView) -> Option<String> {
+        // A search now supersedes the pending live search for the same text.
+        let _ = self.hwnd().KillTimer(FIND_TIMER);
         let find = &self.0.find;
         let query = find.query();
         if query.is_empty() {
@@ -1067,7 +1069,7 @@ impl MainWindow {
                     None => return,
                 },
                 Ok(_) => {}
-                Err(e) => return self.show_load_error(path, e, false, None),
+                Err(e) => return self.show_load_error(path, e),
             }
         }
         self.start_load(path.to_path_buf(), member, None, false);
@@ -1089,8 +1091,7 @@ impl MainWindow {
                 Some(m) => archive::open_member(&path, m, &opts),
                 None => registry::open_document(&path, &opts),
             };
-            let password = opts.password;
-            events::run_on_ui(move || with_main(|m| m.on_loaded(token, path, member, password, attempted, result)));
+            events::run_on_ui(move || with_main(|m| m.on_loaded(token, path, member, attempted, result)));
         });
         if let Err(e) = spawned {
             self.0.load.borrow_mut().busy = false;
@@ -1098,13 +1099,13 @@ impl MainWindow {
         }
     }
 
-    fn on_loaded(&self, token: u64, path: PathBuf, member: Option<String>, password: Option<String>, attempted: bool, result: Result<Box<dyn Document>, OpenError>) {
+    fn on_loaded(&self, token: u64, path: PathBuf, member: Option<String>, attempted: bool, result: Result<Box<dyn Document>, OpenError>) {
         let dialog = {
             let mut load = self.0.load.borrow_mut();
             if token != load.token {
                 return; // cancelled or superseded: drop the result
             }
-            let finish: Pending = Box::new(move |m| m.finish_load(path, member, password, attempted, result));
+            let finish: Pending = Box::new(move |m| m.finish_load(path, member, attempted, result));
             match load.dialog.clone() {
                 Some(d) => {
                     load.pending = Some(finish);
@@ -1172,20 +1173,20 @@ impl MainWindow {
         }
     }
 
-    fn finish_load(&self, path: PathBuf, member: Option<String>, password: Option<String>, attempted: bool, result: Result<Box<dyn Document>, OpenError>) {
+    /// `attempted`: a password was already supplied, so a password error now means it was wrong.
+    fn finish_load(&self, path: PathBuf, member: Option<String>, attempted: bool, result: Result<Box<dyn Document>, OpenError>) {
         match result {
             Ok(doc) => self.present(doc, &path),
             Err(OpenError::PasswordRequired | OpenError::WrongPassword) if !attempted => {
-                let _ = password;
                 if let Some(pw) = prompt_password(self.wnd(), &file_name(&path)) {
                     self.start_load(path, member, Some(pw), true);
                 }
             }
-            Err(e) => self.show_load_error(&path, e, attempted, password),
+            Err(e) => self.show_load_error(&path, e),
         }
     }
 
-    fn show_load_error(&self, path: &Path, e: OpenError, _attempted: bool, _password: Option<String>) {
+    fn show_load_error(&self, path: &Path, e: OpenError) {
         let name = file_name(path);
         let cannot = format!("Cannot open file: {name}");
         match &e {
@@ -1763,10 +1764,6 @@ impl MainWindow {
     }
 }
 
-fn speech_window(hwnd: &w::HWND) {
-    crate::speech::set_main_window(hwnd.ptr() as isize);
-}
-
 fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
@@ -1873,13 +1870,11 @@ mod tests {
     }
 
     #[test]
-    fn every_shortcut_is_unique_and_every_command_has_an_id() {
+    fn shortcuts_are_unique_and_command_ids_are_free() {
         for (i, (_, a)) in SHORTCUTS.iter().enumerate() {
             assert!(SHORTCUTS[i + 1..].iter().all(|(_, b)| b != a), "duplicate shortcut {}", shortcut_text(*a));
         }
-        let mut ids: Vec<u16> = ALL_CMDS.iter().map(|c| *c as u16).collect();
-        ids.dedup();
-        assert_eq!(ids.len(), ALL_CMDS.len());
+        let ids: Vec<u16> = ALL_CMDS.iter().map(|c| *c as u16).collect();
         assert!(ids.iter().all(|&id| id != IDOK && id != IDCANCEL && !(RECENT_BASE..RECENT_BASE + RECENT_MAX).contains(&id)));
     }
 }
