@@ -1,0 +1,94 @@
+[package]
+name = "intome"
+version = "0.1.0"
+edition = "2024"
+description = "InTome: an accessibility-first document reader for Windows"
+default-run = "intome"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "intome"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+simplelog = "0.12"
+bitflags = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.11"
+hex = "0.4"
+base64 = "0.22"
+regex = "1"
+tempfile = "3"
+ureq = { version = "3", features = ["json"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+# Document formats
+pdfium-render = "0.9"
+lopdf = "0.45"
+image = "0.25"
+zip = "8"
+quick-xml = "0.42"
+scraper = "0.27"
+ego-tree = "0.10"
+dom_smoothie = "0.18"
+pulldown-cmark = "0.13"
+rtf-parser = "0.4"
+csv = "1"
+epub = "2"
+mobi = "0.8"
+encoding_rs = "0.8"
+chardetng = "1"
+unrar = "0.5"
+
+# Export
+krilla = "0.8"
+docx-rs = "0.4"
+epub-builder = "0.8"
+
+# Windows
+winsafe = { version = "0.0.29", features = ["gui", "shell", "advapi", "ole", "oleaut", "winmm", "comctl", "gdi", "user", "kernel", "version"] }
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Core",
+    "Media_Ocr",
+    "Media_Playback",
+    "Media_SpeechSynthesis",
+    "Storage",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_Speech",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.62"
+
+[profile.dev.package."*"]
+opt-level = 2

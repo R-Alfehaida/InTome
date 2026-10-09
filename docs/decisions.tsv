@@ -1,0 +1,9 @@
+ts	phase	decision	why	evidence	result
+2026-10-09T02:16:25Z	frame	scoped the port: 100 Python files, 17.8k lines, 15+ formats, 9 exporters, 3 TTS engines, 3 OCR backends	needed the size before planning a long run	Prism-Document-Reader git ls-files + wc	done
+2026-10-09T02:16:25Z	gui-choice	tried wxDragon first because it mirrors wxPython 1:1	least drift from the Python GUI	/tmp/probe_build.log	rejected: needs libclang + cmake + 20-min C++ wxWidgets build, libclang absent
+2026-10-09T02:16:25Z	gui-choice	picked winsafe (native Win32 controls) and probed it	same native controls wx used, pure Rust build, direct HWND access for NotifyWinEvent and RichEdit	scripts/uia_audit.ps1 on probe	VERIFIED: tree, button, RichEdit, status bar expose correct MSAA roles
+2026-10-09T02:16:26Z	a11y-gate	built an MSAA audit script after the managed UIA client showed every Win32 control as an anonymous Pane	NVDA and JAWS read Win32 controls through MSAA, so audit what they see	scripts/uia_audit.ps1	caught tree and RichEdit with no name
+2026-10-09T02:16:26Z	a11y-gate	name unlabelled controls with IAccPropServices SetHwndPropStr	the documented Win32 way to set an accessible name, and the port of wx SetName	src/platform/win32/a11y.rs	VERIFIED: audit PASS after the fix
+2026-10-09T02:16:26Z	libs	PDF via pdfium-render + lopdf, pdfium chromium/7881 bundled in vendor/	pdfium-render reads text/TOC/forms and writes text/checkbox/radio values; lopdf covers /TU and choice values	vendor/pdfium.dll	open
+2026-10-09T02:16:27Z	libs	Surya replaced by Windows.Media.Ocr	Surya is a Python ML model with no Rust port; Windows OCR is local, built in, high quality	docs/PORTING.md	open
+2026-10-09T02:16:27Z	scaffold	wrote shared contracts and compiling stubs for every module before fan-out	parallel agents must not edit the same files or invent their own types	src/document/mod.rs, src/events.rs, src/config.rs	cargo build ok, 4 unit tests pass
