@@ -12,7 +12,11 @@
 //! let d = DialogBuilder::new("Go to page", 360);
 //! let page = d.edit("&Page number:", "1");
 //! d.ok_cancel("OK");
-//! if d.run(parent) { let _ = page.text(); }
+//! // Read controls in on_ok: once run() returns the window is destroyed.
+//! let value = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+//! let v = value.clone();
+//! d.on_ok(move || { *v.borrow_mut() = page.text().unwrap_or_default(); true });
+//! if d.run(parent) { let _ = value.borrow(); }
 //! # }
 //! ```
 

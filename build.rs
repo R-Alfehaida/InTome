@@ -2,8 +2,10 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     // comctl32 v6 gives themed common controls and their full accessibility providers.
-    println!("cargo:rustc-link-arg-bins=/MANIFEST:EMBED");
-    println!("cargo:rustc-link-arg-bins=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
+    for target in ["bins", "examples"] {
+        println!("cargo:rustc-link-arg-{target}=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg-{target}=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
+    }
 
     // Copy runtime assets (pdfium.dll, screen-reader DLLs, user guide) next to the exe.
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());

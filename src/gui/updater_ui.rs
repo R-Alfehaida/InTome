@@ -23,17 +23,13 @@ type CheckResult = Result<CheckOutcome, CheckError>;
 /// Checks for updates on a worker thread, then prompts, downloads with a
 /// progress dialog, verifies, and launches the installer. `silent` suppresses
 /// the "already up to date" and network-error messages.
-pub fn check_for_updates(parent: &impl GuiParent, silent: bool) {
+pub fn check_for_updates(parent: &(impl GuiParent + Send + 'static), silent: bool) {
     let parent = parent.clone();
-    let resume: Box<dyn FnOnce(CheckResult) + Send + '_> = Box::new(move |result| match next_step(result, silent) {
+    let resume: Box<dyn FnOnce(CheckResult) + Send> = Box::new(move |result| match next_step(result, silent) {
         Next::Nothing => {}
         Next::Tell { title, text, icon } => message(&parent, title, &text, icon),
         Next::Offer(info) => offer_update(&parent, &info),
     });
-    // SAFETY: only lifetimes change. `GuiParent` requires `AsRef` of a type
-    // private to winsafe, so only winsafe's window types implement it, and
-    // every one is an owned, 'static handle.
-    let resume: Box<dyn FnOnce(CheckResult) + Send + 'static> = unsafe { std::mem::transmute(resume) };
     std::thread::spawn(move || {
         let result = updater::check_for_updates();
         if let Err(e) = &result {
