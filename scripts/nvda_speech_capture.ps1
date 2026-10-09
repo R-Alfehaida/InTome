@@ -4,7 +4,8 @@
 # Speech Viewer. NVDA's desktop keyboard layout is assumed.
 #
 #   nvda_speech_capture.ps1 -Mark [-Text t]   speak a marker line through nvdaControllerClient
-#   nvda_speech_capture.ps1 -Dump             print NVDA's history after the first marker
+#   nvda_speech_capture.ps1 -Dump             print NVDA's history after the last marker
+#   nvda_speech_capture.ps1 -Close            close a history window a failed -Dump left open
 #
 # Why this route: NVDA runs with uiAccess, so UIPI drops this process's input
 # and window messages to every NVDA window, and while an NVDA window is in the
@@ -19,7 +20,7 @@
 #      Close button. F12 (the add-on's copy-last-utterance) reports where the
 #      navigator is after each move.
 # The clipboard is overwritten.
-param([switch]$Mark, [string]$Text = 'capture mark', [switch]$Dump)
+param([switch]$Mark, [string]$Text = 'capture mark', [switch]$Dump, [switch]$Close)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 $dll = (Resolve-Path (Join-Path $PSScriptRoot '..\vendor\nvdaControllerClient64.dll')).Path
@@ -80,9 +81,29 @@ function Say-Last {
 # Desktop-layout object navigation: NVDA+numpad8/2/4/6 with NumLock off.
 $nav = @{ parent = 0x26; child = 0x28; prev = 0x25; next = 0x27 }
 function Move-Nav([string]$Dir) { [NvdaCap]::Press(1, [uint16]$nav[$Dir], $false); Start-Sleep -Milliseconds 300; Say-Last }
+# Unrelated speech (a notification) can land between a move and F12; NVDA+numpad5 re-reports the navigator.
+function Get-Here { [NvdaCap]::Press(1, 0x0C, $false); Start-Sleep -Milliseconds 300; Say-Last }
 function Move-Until([string]$Dir, [string]$Pattern, [int]$Max = 15) {
-    for ($i = 0; $i -lt $Max; $i++) { $t = Move-Nav $Dir; if ($t -match $Pattern) { return } }
+    for ($i = 0; $i -lt $Max; $i++) { $t = Move-Nav $Dir; if ($t -match $Pattern -or ($t = Get-Here) -match $Pattern) { return } }
     throw "navigator never reached /$Pattern/ (last: $t)"
+}
+
+# Moves the navigator onto the add-on's history window, searching the top-level windows from the Desktop.
+function Enter-HistoryWindow {
+    Move-Until parent '^Desktop'
+    $t = Move-Nav child
+    for ($i = 0; $t -notmatch '^Speech History  window' -and ($t = Get-Here) -notmatch '^Speech History  window'; $i++) {
+        if ($i -ge 60) { throw 'the Speech History window is not among the top-level windows' }
+        $t = Move-Nav next
+    }
+}
+# NVDA itself presses the window's Close button.
+function Close-HistoryWindow {
+    Enter-HistoryWindow
+    Move-Until child 'menu bar' 1
+    Move-Until next '^Close  button' 1
+    [NvdaCap]::Press(1, 0x0D, $true)
+    Start-Sleep -Milliseconds 500
 }
 
 if ($Mark) {
@@ -90,45 +111,45 @@ if ($Mark) {
     Start-Sleep -Milliseconds 400
     exit 0
 }
+if ($Close) {
+    Close-HistoryWindow
+    exit 0
+}
 if ($Dump) {
     $front = [NvdaCap]::GetForegroundWindow()
     $fgset = Join-Path $env:TEMP 'nvda_capture_fgset.exe'
     if (-not (Test-Path $fgset)) {
-        Add-Type -OutputAssembly $fgset -OutputType ConsoleApplication -TypeDefinition @'
+        Add-Type -OutputAssembly $fgset -OutputType ConsoleApplication -TypeDefinition @"
 using System; using System.Runtime.InteropServices;
 public static class P {
   [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
   public static int Main(string[] a) { return SetForegroundWindow(new IntPtr(Convert.ToInt64(a[0]))) ? 0 : 1; }
 }
-'@
+"@
     }
     [NvdaCap]::Press(1, 0x48, $false)
     Start-Sleep -Milliseconds 1500
     if (-not [NvdaCap]::RunDebugged($fgset, [string]$front.ToInt64())) { throw 'could not take the foreground back from NVDA' }
     Start-Sleep -Milliseconds 500
-    Move-Until parent '^Desktop'
-    Move-Nav child | Out-Null
-    for ($i = 0; $i -lt 15 -and (Say-Last) -notmatch '^Speech History  window'; $i++) { Move-Nav next | Out-Null }
-    Move-Until child 'menu bar' 1
-    Move-Until next '^Close  button' 3
-    Move-Until next '^Speech History  document' 3
-    # Review cursor: top line, mark, bottom line, end of line, copy (NVDA+F10 twice).
-    [NvdaCap]::Press(2, 0x24, $false); Start-Sleep -Milliseconds 200
-    [NvdaCap]::Press(1, 0x78, $false); Start-Sleep -Milliseconds 200
-    [NvdaCap]::Press(2, 0x21, $false); Start-Sleep -Milliseconds 200
-    [NvdaCap]::Press(2, 0x22, $false); Start-Sleep -Milliseconds 200
-    $seq = [NvdaCap]::GetClipboardSequenceNumber()
-    [NvdaCap]::Press(1, 0x79, $false); Start-Sleep -Milliseconds 100; [NvdaCap]::Press(1, 0x79, $false)
-    $deadline = (Get-Date).AddMilliseconds(3000)
-    while ([NvdaCap]::GetClipboardSequenceNumber() -eq $seq -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
-    Start-Sleep -Milliseconds 100
-    $history = if ([NvdaCap]::GetClipboardSequenceNumber() -ne $seq) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
-    # Reviewing moved the navigator into the list; climb back to the window's Close button.
-    Move-Until parent '^Speech History  window' 4
-    Move-Until child 'menu bar' 1
-    Move-Until next '^Close  button' 1
-    [NvdaCap]::Press(1, 0x0D, $true)
-    Start-Sleep -Milliseconds 500
+    try {
+        Enter-HistoryWindow
+        Move-Until child 'menu bar' 1
+        Move-Until next '^Close  button' 1
+        Move-Until next '^Speech History  document' 1
+        # Review cursor: top line, mark, bottom line, end of line, copy (NVDA+F10 twice).
+        [NvdaCap]::Press(2, 0x24, $false); Start-Sleep -Milliseconds 200
+        [NvdaCap]::Press(1, 0x78, $false); Start-Sleep -Milliseconds 200
+        [NvdaCap]::Press(2, 0x21, $false); Start-Sleep -Milliseconds 200
+        [NvdaCap]::Press(2, 0x22, $false); Start-Sleep -Milliseconds 200
+        $seq = [NvdaCap]::GetClipboardSequenceNumber()
+        [NvdaCap]::Press(1, 0x79, $false); Start-Sleep -Milliseconds 100; [NvdaCap]::Press(1, 0x79, $false)
+        $deadline = (Get-Date).AddMilliseconds(3000)
+        while ([NvdaCap]::GetClipboardSequenceNumber() -eq $seq -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
+        Start-Sleep -Milliseconds 100
+        $history = if ([NvdaCap]::GetClipboardSequenceNumber() -ne $seq) { [System.Windows.Forms.Clipboard]::GetText() } else { '' }
+    } finally {
+        Close-HistoryWindow
+    }
     # The window lists the newest utterance first.
     $lines = @($history -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     [array]::Reverse($lines)
@@ -137,5 +158,5 @@ public static class P {
     if ($start + 1 -lt $lines.Count) { $lines[($start + 1)..($lines.Count - 1)] }
     exit 0
 }
-Write-Output 'usage: nvda_speech_capture.ps1 -Mark [-Text t] | -Dump'
+Write-Output 'usage: nvda_speech_capture.ps1 -Mark [-Text t] | -Dump | -Close'
 exit 2
