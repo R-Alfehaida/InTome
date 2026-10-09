@@ -557,8 +557,12 @@ impl MainWindow {
         });
         let m = self.clone();
         ui.progress.slider.on().wm_h_scroll(move |_| {
-            if let Some(v) = m.active_view() {
-                v.go_to_page(m.0.progress.requested_page());
+            // Every move is followed by a TB_ENDTRACK at the same position; turning again would announce twice.
+            let page = m.0.progress.requested_page();
+            if let Some(v) = m.active_view()
+                && page != v.current_page()
+            {
+                v.go_to_page(page);
             }
             Ok(())
         });
