@@ -80,6 +80,8 @@ pub struct SelChange {
     pub hwnd_from: isize,
     pub id_from: usize,
     pub code: i32,
+    // NMHDR is padded to 24 bytes before the CHARRANGE.
+    _pad: u32,
     cp_min: i32,
     cp_max: i32,
     pub seltyp: u16,
@@ -263,6 +265,13 @@ pub fn offset_len(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selchange_matches_the_c_layout() {
+        // SELCHANGE on x64: NMHDR (24 bytes, padded), CHARRANGE at 24, seltyp at 32.
+        assert_eq!(std::mem::offset_of!(SelChange, cp_min), 24);
+        assert_eq!(std::mem::offset_of!(SelChange, seltyp), 32);
+    }
 
     #[test]
     fn crlf_counts_as_one_unit_both_ways() {
