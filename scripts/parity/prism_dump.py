@@ -9,7 +9,7 @@ import os
 import pkgutil
 import sys
 
-PRISM_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "Prism-Document-Reader")
+PRISM_ROOT = os.environ.get("PRISM_ROOT", "C:/Users/khais/Documents/GitHub/Prism-Document-Reader")
 sys.path.insert(0, os.path.abspath(PRISM_ROOT))
 os.environ.setdefault("APPDATA", os.environ.get("TEMP", "."))
 

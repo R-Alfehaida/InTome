@@ -17,11 +17,13 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-PRISM_PY = os.path.abspath(os.path.join(ROOT, "..", "Prism-Document-Reader", ".venv", "Scripts", "python.exe"))
+PRISM_ROOT = os.environ.get("PRISM_ROOT", "C:/Users/khais/Documents/GitHub/Prism-Document-Reader")
+PRISM_PY = os.path.join(PRISM_ROOT, ".venv", "Scripts", "python.exe")
 
 
 def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    env = dict(os.environ, PYTHONUTF8="1", PRISM_ROOT=PRISM_ROOT)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
     if r.returncode != 0:
         sys.exit(f"{cmd[0]} failed:\n{r.stderr[-2000:]}")
     return json.loads(r.stdout)
