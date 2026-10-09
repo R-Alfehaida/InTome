@@ -19,7 +19,9 @@ use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindow
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, HMENU, SendMessageW, WINDOW_STYLE, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
-use windows::core::w;
+use windows::Win32::Graphics::Gdi::{COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, GetSysColor};
+use windows::Win32::UI::Controls::RichEdit::{EM_GETOLEINTERFACE, ITextDocument, tomAutoColor};
+use windows::core::{IUnknown, Interface, w};
 
 use super::a11y;
 
@@ -30,6 +32,7 @@ const ES_READONLY: u32 = 0x800;
 const ES_WANTRETURN: u32 = 0x1000;
 const WM_USER: u32 = 0x400;
 const EM_SCROLLCARET: u32 = 0xB7;
+const EM_SETREADONLY: u32 = 0xCF;
 const EM_LINEINDEX: u32 = 0xBB;
 const EM_EXGETSEL: u32 = WM_USER + 52;
 const EM_EXLIMITTEXT: u32 = WM_USER + 53;
@@ -164,6 +167,43 @@ impl RichEdit {
         let mut cr = CharRange::default();
         self.send(EM_EXGETSEL, 0, &mut cr as *mut _ as isize);
         (cr.cp_min.max(0) as usize, cr.cp_max.max(0) as usize)
+    }
+
+    /// Paints `start..end` (control offsets) in the system highlight colours,
+    /// clearing any earlier highlight, without touching the selection: a
+    /// selection change makes screen readers announce "selected"/"unselected"
+    /// over InTome's own speech. An empty range only clears.
+    pub fn set_highlight(self, start: usize, end: usize) {
+        if let Err(e) = self.paint_highlight(start, end) {
+            log::warn!("highlight failed: {e}");
+        }
+    }
+
+    fn paint_highlight(self, start: usize, end: usize) -> windows::core::Result<()> {
+        let mut raw: *mut std::ffi::c_void = std::ptr::null_mut();
+        self.send(EM_GETOLEINTERFACE, 0, &mut raw as *mut _ as isize);
+        if raw.is_null() {
+            return Ok(());
+        }
+        // EM_GETOLEINTERFACE hands over an AddRef'd IRichEditOle.
+        let doc: ITextDocument = unsafe { IUnknown::from_raw(raw) }.cast()?;
+        let paint = |s: usize, e: usize, fore: i32, back: i32| unsafe {
+            let font = doc.Range(s as i32, e as i32)?.GetFont()?;
+            font.SetForeColor(fore)?;
+            font.SetBackColor(back)
+        };
+        // TOM refuses formatting on a read-only control (E_ACCESSDENIED), so
+        // lift read-only just while painting.
+        self.send(EM_SETREADONLY, 0, 0);
+        let painted = paint(0, i32::MAX as usize, tomAutoColor.0, tomAutoColor.0).and_then(|()| {
+            if end > start {
+                let (fore, back) = unsafe { (GetSysColor(COLOR_HIGHLIGHTTEXT) as i32, GetSysColor(COLOR_HIGHLIGHT) as i32) };
+                paint(start, end, fore, back)?;
+            }
+            Ok(())
+        });
+        self.send(EM_SETREADONLY, 1, 0);
+        painted
     }
 
     /// Selects `start..end` (control offsets) and scrolls it into view.

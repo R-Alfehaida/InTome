@@ -223,6 +223,14 @@ impl ContentView {
 
     // Page display
 
+    /// Shows the current page without a "Page N of M" announcement, for a
+    /// caller that speaks its own message (opening a document).
+    pub fn show_current_page_quietly(&self) {
+        self.advancing.set(true);
+        self.show_current_page();
+        self.advancing.set(false);
+    }
+
     pub fn show_current_page(&self) {
         self.end_announced.set(false);
         self.edit.set_text(&shown_text(&self.current_text()));
@@ -301,6 +309,15 @@ impl ContentView {
     pub fn select(&self, start: usize, end: usize) {
         let text = self.current_text();
         self.edit.set_selection(char_to_offset(&text, start), char_to_offset(&text, end));
+    }
+
+    /// Puts the caret at `start` and paints `start..end` (chars) as a visual
+    /// highlight that screen readers do not announce, unlike a selection.
+    pub fn mark(&self, start: usize, end: usize) {
+        let text = self.current_text();
+        let (s, e) = (char_to_offset(&text, start), char_to_offset(&text, end));
+        self.edit.set_selection(s, s);
+        self.edit.set_highlight(s, e);
     }
 
     /// The selected text, sliced from the page by char index. Slicing the page
@@ -433,7 +450,7 @@ impl ContentView {
             self.go_to_page_quietly(page_index);
         }
         let end = if config::get().navigation.highlight_on_navigate { element.end_pos } else { element.start_pos };
-        self.select(element.start_pos, end);
+        self.mark(element.start_pos, end);
         self.focus();
         events::announce(element_announcement(element));
     }
@@ -558,7 +575,7 @@ impl ReadingTarget for ViewTarget {
         self.with(|v| v.caret())
     }
     fn highlight(&self, start: usize, end: usize) {
-        self.with(|v| v.select(start, end))
+        self.with(|v| v.mark(start, end))
     }
     fn go_to_page(&self, index: usize) {
         self.with(|v| {

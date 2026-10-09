@@ -1248,7 +1248,7 @@ impl MainWindow {
         self.0.views.borrow_mut().push(view.clone());
         self.activate(index);
         self.sync_toc(&view);
-        view.show_current_page();
+        view.show_current_page_quietly();
         let page_count = view.page_count();
 
         let _ = self.hwnd().SetWindowText(&if meta.author.is_empty() {
