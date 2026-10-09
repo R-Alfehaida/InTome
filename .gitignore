@@ -1,3 +1,4 @@
 /target
 *.log
 decisions.local.tsv
+/.claude/
