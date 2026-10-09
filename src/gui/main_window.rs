@@ -504,10 +504,17 @@ impl MainWindow {
                 Ok(())
             });
         }
-        // Enter in a single-line edit outside a dialog arrives as IDOK.
+        // Outside a dialog, IsDialogMessage turns Enter into IDOK before the
+        // focused control sees it.
         let m = self.clone();
         ui.wnd.on().wm_command_acc_menu(IDOK, move || {
-            if m.0.find.is_shown() && w::HWND::GetFocus().is_some_and(|f| m.0.find.contains(&f)) {
+            let focus = w::HWND::GetFocus();
+            if focus.as_ref() == Some(m.0.toc.tree.hwnd()) {
+                if let (Some(page), Some(v)) = (m.0.toc.selected_page(), m.active_view()) {
+                    v.go_to_page(page);
+                    v.focus();
+                }
+            } else if m.0.find.is_shown() && focus.is_some_and(|f| m.0.find.contains(&f)) {
                 m.find_next(true);
             }
             Ok(())
@@ -541,14 +548,6 @@ impl MainWindow {
                 && let Some(v) = m.active_view()
             {
                 v.go_to_page(page);
-            }
-            Ok(())
-        });
-        let m = self.clone();
-        ui.toc.tree.on().nm_return(move || {
-            if let (Some(page), Some(v)) = (m.0.toc.selected_page(), m.active_view()) {
-                v.go_to_page(page);
-                v.focus();
             }
             Ok(())
         });
@@ -795,6 +794,10 @@ impl MainWindow {
         }
         let cur = self.0.active.get().unwrap_or(0) as isize;
         self.on_tab_changed((cur + step).rem_euclid(count as isize) as usize);
+        // The previous tab's control had focus and is now hidden.
+        if let Some(v) = self.active_view() {
+            v.focus();
+        }
     }
 
     fn close_tab(&self) {
@@ -1052,6 +1055,9 @@ impl MainWindow {
             announce("A document is already loading. Please wait.");
             return;
         }
+        // Recent Files must reopen from any working folder.
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let path = absolute.as_path();
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let mut member = None;
         if ext == "zip" || ext == "rar" {
@@ -1486,6 +1492,7 @@ impl MainWindow {
         v.with_doc(|d| {
             let fields = d.form_fields();
             if let Some(pdf) = d.as_pdf() {
+                log::debug!("opening the form dialog for {filename}: {} fields", fields.len());
                 form_dialog::show(self.wnd(), pdf, fields, &filename);
             }
         });
@@ -1568,12 +1575,10 @@ impl MainWindow {
         let d = DialogBuilder::new("Named Bookmark", 360);
         let name = d.edit("Bookmark &name:", "");
         d.ok_cancel("OK");
-        if d.run(self.wnd()) {
-            let name = name.text().unwrap_or_default();
-            let name = name.trim();
-            if !name.is_empty() {
-                report(AnnotationManager::global().add_bookmark(&hash, page, caret, name), "save the bookmark");
-            }
+        if let Some(name) = text_on_ok(&d, name, self.wnd())
+            && !name.trim().is_empty()
+        {
+            report(AnnotationManager::global().add_bookmark(&hash, page, caret, name.trim()), "save the bookmark");
         }
     }
 
@@ -1701,13 +1706,19 @@ impl MainWindow {
         let _ = self.hwnd().MessageBox(&text, &format!("About {APP_NAME}"), co::MB::OK | co::MB::ICONINFORMATION);
     }
 
-    /// Yes/No question; `default_no` makes No the default button.
+    /// Yes/No question; `default_no` makes No the default button. A task
+    /// dialog, unlike a Yes/No message box, closes on Escape (as No).
     fn ask(&self, text: &str, caption: &str, default_no: bool) -> bool {
-        let mut flags = co::MB::YESNO | co::MB::ICONQUESTION;
-        if default_no {
-            flags |= co::MB::DEFBUTTON2;
-        }
-        self.hwnd().MessageBox(text, caption, flags) == Ok(co::DLGID::YES)
+        let answer = w::TaskDialogIndirect(&w::TASKDIALOGCONFIG {
+            hwnd_parent: Some(self.hwnd()),
+            flags: co::TDF::ALLOW_DIALOG_CANCELLATION,
+            common_buttons: co::TDCBF::YES | co::TDCBF::NO,
+            window_title: Some(caption),
+            content: Some(text),
+            default_button_id: if default_no { co::DLGID::NO.raw() } else { co::DLGID::YES.raw() },
+            ..Default::default()
+        });
+        matches!(answer, Ok((co::DLGID::YES, ..)))
     }
 
     // Geometry
@@ -1797,7 +1808,20 @@ fn prompt_password(parent: &impl GuiParent, filename: &str) -> Option<String> {
     d.column().text(&format!("The file '{filename}' is password-protected.\nPlease enter the password:"), 2);
     let pw = d.edit_with("&Password:", "", co::ES::PASSWORD);
     d.ok_cancel("OK");
-    d.run(parent).then(|| pw.text().unwrap_or_default())
+    text_on_ok(&d, pw, parent)
+}
+
+/// The edit's text when the dialog closes through OK. Read in the OK
+/// handler: once `run` returns, the control is destroyed.
+fn text_on_ok(d: &DialogBuilder, edit: gui::Edit, parent: &impl GuiParent) -> Option<String> {
+    let text = Rc::new(RefCell::new(None));
+    let t = text.clone();
+    d.on_ok(move || {
+        *t.borrow_mut() = Some(edit.text().unwrap_or_default());
+        true
+    });
+    d.run(parent);
+    text.take()
 }
 
 /// Prism's "Select Document" choice for an archive holding several documents.

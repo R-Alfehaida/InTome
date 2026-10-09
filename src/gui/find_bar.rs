@@ -62,7 +62,6 @@ impl FindBar {
         a11y::set_name(p(&self.input), "Find in document");
         a11y::set_name(p(&self.prev), "Previous match");
         a11y::set_name(p(&self.next), "Next match");
-        a11y::set_name(p(&self.count), "Match count");
         a11y::set_name(p(&self.close), "Close find bar");
     }
 
