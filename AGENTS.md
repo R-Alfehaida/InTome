@@ -6,7 +6,7 @@ InTome is an accessibility-first document reader for Windows, written in Rust. I
 
 - `README.md` lists build requirements and optional tools.
 - `docs/PORTING.md` has the library mapping, the shared contracts, code conventions and the accessibility rules. Treat the accessibility rules as spec.
-- The Python app at `C:\Users\khais\Documents\GitHub\Prism-Document-Reader` defines the behavior. Its `CLAUDE.md` gotchas for RichEdit and Gemini still apply here.
+- The Python app at `../Prism-Document-Reader` defines the behavior. Its `CLAUDE.md` gotchas for RichEdit and Gemini still apply here.
 
 ## Working here
 
