@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # Passed through the environment so an odd tag name is never spliced into script text.
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # checkout leaves an annotated tag without its message; fetch it again.
+      - name: Fetch the tag annotation
+        run: git fetch --force origin "refs/tags/${env:TAG}:refs/tags/${env:TAG}"
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if ($env:TAG -ne "v$version") {
+            throw "Tag $env:TAG does not match the Cargo.toml version $version. Delete the tag, fix the version, and tag again."
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Package
+        run: ./scripts/package_release.ps1
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "dist/InTome-$env:VERSION.zip"
+          $notes = Join-Path $env:RUNNER_TEMP 'notes.md'
+          git tag -l --format='%(contents)' $env:TAG | Set-Content $notes -Encoding utf8
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            # A rerun of this job: replace the asset, keep the release.
+            gh release upload $env:TAG $zip --clobber
+          } else {
+            gh release create $env:TAG $zip --title "InTome $env:VERSION" --notes-file $notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh failed" }
