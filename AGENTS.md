@@ -31,7 +31,7 @@ InTome is an accessibility-first document reader for Windows, written in Rust. I
 - `/release` runs `scripts/release.ps1`. It bumps the version in `Cargo.toml`, tags `vX.Y.Z` with the commits since the last tag as its message, and pushes `main` and the tag.
 - The tag push triggers `.github/workflows/release.yml`. It fails if the tag differs from the `Cargo.toml` version, builds with `scripts/package_release.ps1`, and publishes `InTome-X.Y.Z.zip` with the tag message as the release notes.
 - Package from `vendor/` and `resources/`, never from `target\release`, which keeps stale DLLs from older builds.
-- The in-app updater (`src/updater.rs`) is not live. Its manifest URL is a placeholder and it expects an Inno Setup installer, which the project doesn't build.
+- The in-app updater (`src/updater.rs`) reads the latest GitHub release of `R-Alfehaida/InTome` without a token, so it only works once the repo is public. It downloads the `InTome-X.Y.Z.zip` asset, checks it against GitHub's SHA-256 digest, swaps the files in the exe's folder and restarts. Renaming the zip asset or its inner folder breaks updates for every installed copy.
 
 ## Confirm before
 

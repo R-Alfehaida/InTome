@@ -18,7 +18,10 @@ pub mod progress_bar;
 pub mod shortcuts_dialog;
 pub mod toc_tree;
 
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+use std::os::windows::process::CommandExt;
+use std::process::Command;
+
+use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::core::w;
 use winsafe::{self as ws, co, prelude::*};
@@ -42,6 +45,9 @@ fn setup_logging() {
     }));
 }
 
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
 /// Wraps the window for the event dispatcher, which must be `Sync`. It only
 /// reads the HWND and sends it a message, which any thread may do.
 struct Dispatch(ws::gui::WindowMain);
@@ -63,10 +69,13 @@ pub fn run() {
     log::info!("{APP_NAME} starting");
 
     // Kept alive for the whole run: its name is the single-instance lock.
-    let _instance = unsafe { CreateMutexW(None, false, w!("InTome-single-instance")) };
+    let instance = unsafe { CreateMutexW(None, false, w!("InTome-single-instance")) };
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         let _ = ws::HWND::NULL.MessageBox(&format!("Another instance of {APP_NAME} is already running."), APP_NAME, co::MB::OK | co::MB::ICONWARNING);
         return;
+    }
+    if let Ok(exe) = std::env::current_exe() && let Some(dir) = exe.parent() {
+        crate::updater::remove_replaced_files(dir);
     }
 
     let main = match main_window::MainWindow::new() {
@@ -91,4 +100,19 @@ pub fn run() {
         log::error!("main loop ended with an error: {e}");
     }
     log::info!("{APP_NAME} shutting down");
+    if crate::updater::restart_requested() {
+        restart(instance);
+    }
+}
+
+/// Starts a fresh copy of the exe. The single-instance mutex is released first, or the new
+/// process would find it held and refuse to start.
+fn restart(instance: windows::core::Result<HANDLE>) {
+    if let Ok(handle) = instance {
+        let _ = unsafe { CloseHandle(handle) };
+    }
+    let spawned = std::env::current_exe().and_then(|exe| Command::new(exe).creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP).spawn());
+    if let Err(e) = spawned {
+        log::error!("cannot restart after the update: {e}");
+    }
 }

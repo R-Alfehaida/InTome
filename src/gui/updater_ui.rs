@@ -1,7 +1,7 @@
 //! The UI half of prism/updater.py over `crate::updater`: check on a worker
-//! thread, prompt, download with a cancellable progress dialog, verify, launch
-//! the installer, then quit so it can replace the files. The check result
-//! comes back through `events::run_on_ui` (Prism's `wx.CallAfter`).
+//! thread, prompt, download with a cancellable progress dialog, verify, swap
+//! the new files in, then close so `gui::run` can restart the app. The check
+//! result comes back through `events::run_on_ui` (Prism's `wx.CallAfter`).
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ const PROGRESS_TIMER: usize = 1;
 type CheckResult = Result<CheckOutcome, CheckError>;
 
 /// Checks for updates on a worker thread, then prompts, downloads with a
-/// progress dialog, verifies, and launches the installer. `silent` suppresses
+/// progress dialog, verifies, and installs the zip. `silent` suppresses
 /// the "already up to date" and network-error messages.
 pub fn check_for_updates(parent: &(impl GuiParent + Send + 'static), silent: bool) {
     let parent = parent.clone();
@@ -39,11 +39,11 @@ pub fn check_for_updates(parent: &(impl GuiParent + Send + 'static), silent: boo
     });
 }
 
-/// Prompts to install `info`, then downloads, verifies and launches it: what
+/// Prompts to install `info`, then downloads, verifies and installs it: what
 /// `check_for_updates` does once it finds an update.
 pub fn offer_update(parent: &impl GuiParent, info: &UpdateInfo) {
     let ask = format!(
-        "A new version of {APP_NAME} ({}) is available.\nYou are running {APP_VERSION}.\n\nWould you like to download and install it now?\n{APP_NAME} will close so the installer can finish.",
+        "A new version of {APP_NAME} ({}) is available.\nYou are running {APP_VERSION}.\n\nWould you like to download and install it now?\n{APP_NAME} will restart to finish.",
         info.version
     );
     events::announce(format!("{APP_NAME} {} is available", info.version));
@@ -51,7 +51,7 @@ pub fn offer_update(parent: &impl GuiParent, info: &UpdateInfo) {
         return;
     }
     match download_with_progress(parent, info) {
-        Ok(path) => launch(parent, &path),
+        Ok(path) => install(parent, &path),
         Err(DownloadError::Cancelled) => {
             log::info!("Update download cancelled by user");
             events::announce("Update download cancelled");
@@ -176,16 +176,25 @@ fn progress_text(done: u64, total: u64) -> (Option<u32>, String) {
     }
 }
 
-/// Starts the installer and quits so it can replace the files; on failure says where the download is.
-fn launch(parent: &impl GuiParent, path: &Path) {
-    match updater::launch_installer(path) {
+/// Swaps the downloaded zip into the app's folder and closes the main window so `gui::run`
+/// restarts the app; on failure says where the download is.
+fn install(parent: &impl GuiParent, zip: &Path) {
+    let result = std::env::current_exe().map_err(anyhow::Error::from).and_then(|exe| updater::apply_update(zip, exe.parent().unwrap_or(Path::new("."))));
+    match result {
         Ok(()) => {
-            events::announce(format!("Installing the update. {APP_NAME} will close."));
-            w::PostQuitMessage(0);
+            let _ = std::fs::remove_file(zip);
+            events::announce(format!("Update installed. {APP_NAME} is restarting."));
+            updater::request_restart();
+            // Closing through WM_CLOSE runs the main window's on_close, which saves reading positions.
+            let top = parent.hwnd().GetAncestor(co::GA::ROOT);
+            let top = top.as_ref().unwrap_or(parent.hwnd());
+            if let Err(e) = unsafe { top.PostMessage(w::msg::Wm { msg_id: co::WM::CLOSE, wparam: 0, lparam: 0 }) } {
+                log::error!("could not close the main window for the restart: {e}");
+            }
         }
         Err(e) => {
-            log::error!("Failed to launch installer {}: {e}", path.display());
-            let text = format!("The installer could not be started. The download was saved to:\n{}\n\nYou can run it manually to update.", path.display());
+            log::error!("Failed to install update {}: {e:#}", zip.display());
+            let text = format!("The update could not be installed. The download was saved to:\n{}\n\nYou can extract it over your {APP_NAME} folder to update.", zip.display());
             message(parent, "Update Failed", &text, co::MB::ICONERROR);
         }
     }
@@ -196,7 +205,7 @@ mod tests {
     use super::*;
 
     fn info() -> UpdateInfo {
-        UpdateInfo { version: "9.9.9".into(), download_url: "https://example.com/InTome_Setup.exe".into(), sha256: None }
+        UpdateInfo { version: "9.9.9".into(), download_url: "https://example.com/InTome-9.9.9.zip".into(), sha256: None }
     }
 
     #[test]

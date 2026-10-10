@@ -281,7 +281,9 @@ InTome is designed from the ground up for screen reader users:
 
 ## Updates
 
-Choose **Help > Check for Updates** to see whether a newer version of InTome is available. InTome contacts a secure update server over HTTPS -- no account, sign-in, or token is required. If a newer version exists, InTome asks whether you want to install it. If you agree, it downloads the installer, verifies its integrity, then closes so the installer can finish updating InTome. If you are already running the latest version, InTome simply tells you so.
+Choose **Help > Check for Updates** to see whether a newer version of InTome is available. InTome checks the project's GitHub releases over HTTPS -- no account, sign-in, or token is required. If a newer version exists, InTome asks whether you want to install it. If you agree, it downloads the new version, verifies its integrity, replaces its own files and restarts. Your settings, bookmarks, notes and reading positions are kept. If you are already running the latest version, InTome simply tells you so.
+
+InTome must be able to write to its own folder to update itself. If it can't, it tells you where it saved the download so you can extract it over the InTome folder yourself.
 
 ## Keyboard Shortcuts Reference
 

@@ -1,5 +1,5 @@
 //! Hosts the update UI with a UI dispatcher installed, as the main window does:
-//!   cargo run --example updater_demo -- check          (manual check against MANIFEST_URL)
+//!   cargo run --example updater_demo -- check          (manual check against the GitHub releases URL)
 //!   cargo run --example updater_demo -- check-silent   (startup check: quiet unless an update exists)
 //!   cargo run --example updater_demo -- offer <https url> [sha256]   (prompt, download, verify)
 //! The host window stays open; close it when done. Announcements print to
