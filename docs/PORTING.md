@@ -23,7 +23,7 @@ paths (`%APPDATA%\InTome`), the user guide. Code identifiers drop the prefix.
 | SQLAlchemy | `rusqlite` | |
 | accessible_output2 | `speech` over the `prismer` crate (prism, statically linked) | Prism picks NVDA, JAWS and other screen readers, UIA for Narrator, else a OneCore/SAPI voice. |
 | comtypes / ctypes | `windows` crate | |
-| google-genai | `ureq` + `serde_json` against the Gemini REST API | Same model IDs and prompts. |
+| google-genai | `ureq` + `serde_json` against the Gemini Interactions API (`/v1beta/interactions`) | Same prompts. Model defaults follow Google's migration table, not Prism's literals. |
 | PyMuPDF | `pdfium-render` (bundled `vendor/pdfium.dll`, chromium/7881) + `lopdf` | lopdf writes what pdfium cannot (`/TU` labels, choice values). |
 | Surya (local OCR model) | Windows.Media.Ocr (`windows` crate) | Built into Windows 10+, local, no download. Backend key `windows`. |
 | pytesseract | `tesseract.exe` via `std::process` | |

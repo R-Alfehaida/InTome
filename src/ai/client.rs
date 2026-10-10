@@ -1,5 +1,6 @@
 //! Gemini REST client with retry, model fallback, and DPAPI key storage
-//! (port of prism/ai/client.py, which used the google-genai SDK).
+//! (port of prism/ai/client.py, which used the google-genai SDK). Requests go
+//! through the Interactions API; only the model list still uses `models.list`.
 
 use std::time::Duration;
 
@@ -59,7 +60,10 @@ pub const OCR_MAX_OUTPUT_TOKENS: u32 = 32768;
 
 const MAX_RETRIES: u32 = 3;
 const BASE_DELAY_SECS: f64 = 1.0;
-const API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+const INTERACTIONS_URL: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const MODELS_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+// Pins the steps-based response schema these parsers read.
+const API_REVISION: &str = "2026-05-20";
 // Base64 audio for a long TTS chunk passes ureq's 10 MB default body limit.
 const MAX_RESPONSE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -85,55 +89,61 @@ fn classify_failure(error_lower: &str, attempt: u32) -> Failure {
     }
 }
 
+// `store: false` on every request: the Interactions API keeps requests for up to
+// 55 days by default, and these carry the user's documents.
+// Gemini 3 deprecates `temperature`, so OCR no longer sets Prism's 0.1.
 fn image_request(image: &[u8], mime_type: &str, prompt: &str, system_instruction: &str, json_mode: bool) -> Value {
-    let mut generation_config = json!({ "maxOutputTokens": OCR_MAX_OUTPUT_TOKENS, "temperature": 0.1 });
-    if json_mode {
-        generation_config["responseMimeType"] = json!("application/json");
-    }
     let mut body = json!({
-        "contents": [{ "role": "user", "parts": [
-            { "inlineData": { "mimeType": mime_type, "data": B64.encode(image) } },
-            { "text": prompt },
-        ]}],
-        "generationConfig": generation_config,
+        "input": [
+            { "type": "image", "mime_type": mime_type, "data": B64.encode(image) },
+            { "type": "text", "text": prompt },
+        ],
+        "generation_config": { "max_output_tokens": OCR_MAX_OUTPUT_TOKENS },
+        "store": false,
     });
+    if json_mode {
+        body["response_format"] = json!({ "type": "text", "mime_type": "application/json" });
+    }
     if !system_instruction.is_empty() {
-        body["systemInstruction"] = json!({ "parts": [{ "text": system_instruction }] });
+        body["system_instruction"] = json!(system_instruction);
     }
     body
 }
 
+// No `mime_type` in `response_format`: 3.8 TTS models default to WAV and older ones to
+// raw PCM, and the older ones reject an explicit `audio/l16`. Both are 24 kHz 16-bit mono.
 fn audio_request(text: &str, voice: &str) -> Value {
     json!({
-        "contents": [{ "role": "user", "parts": [{ "text": text }] }],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": { "voiceConfig": { "prebuiltVoiceConfig": { "voiceName": voice } } },
-        },
+        "input": [{ "type": "user_input", "content": [{ "type": "text", "text": text }] }],
+        "response_format": { "type": "audio" },
+        "generation_config": { "speech_config": [{ "voice": voice }] },
+        "store": false,
     })
 }
 
-/// The first candidate's text parts, skipping thought summaries. Empty when the
-/// model returned no text part, which counts as an empty extraction.
-fn response_text(response: &Value) -> String {
-    let parts = response["candidates"][0]["content"]["parts"].as_array();
-    parts
-        .into_iter()
-        .flatten()
-        .filter(|p| p["thought"] != json!(true))
-        .filter_map(|p| p["text"].as_str())
-        .collect()
+/// Content items of the `model_output` steps, in order. Thought and tool steps are skipped.
+fn output_content(response: &Value) -> impl Iterator<Item = &Value> {
+    let steps = response["steps"].as_array().map(Vec::as_slice).unwrap_or_default();
+    steps
+        .iter()
+        .filter(|s| s["type"] == "model_output")
+        .flat_map(|s| s["content"].as_array().map(Vec::as_slice).unwrap_or_default())
 }
 
-/// True if any candidate stopped at the output-token cap. Matched by name so a
-/// renamed or prefixed enum value still counts.
+/// The model's output text. Empty when the model returned no text, which counts
+/// as an empty extraction.
+fn response_text(response: &Value) -> String {
+    output_content(response).filter(|c| c["type"] == "text").filter_map(|c| c["text"].as_str()).collect()
+}
+
+/// The last audio block's base64 data.
+fn response_audio(response: &Value) -> Option<&str> {
+    output_content(response).filter(|c| c["type"] == "audio").filter_map(|c| c["data"].as_str()).last()
+}
+
+/// True if the interaction stopped early, for OCR at the output-token cap.
 fn hit_token_cap(response: &Value) -> bool {
-    response["candidates"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|c| c["finishReason"].as_str())
-        .any(|r| r.to_ascii_uppercase().contains("MAX_TOKENS"))
+    response["status"] == "incomplete"
 }
 
 /// Strips a markdown code fence the model may wrap JSON in.
@@ -188,14 +198,14 @@ impl GeminiClient {
         get_api_key().is_some()
     }
 
-    /// One HTTP call. Errors carry the status and API error body so
+    /// One interaction. Errors carry the status and API error body so
     /// [`classify_failure`] can match on them as Prism matched SDK exceptions.
-    fn post(&self, model: &str, body: &Value) -> Result<Value, String> {
-        let url = format!("{API_BASE}/{model}:generateContent");
+    fn post(&self, body: &Value) -> Result<Value, String> {
         let mut resp = self
             .agent
-            .post(&url)
+            .post(INTERACTIONS_URL)
             .header("x-goog-api-key", &self.api_key)
+            .header("Api-Revision", API_REVISION)
             .send_json(body)
             .map_err(|e| e.to_string())?;
         let status = resp.status();
@@ -203,7 +213,11 @@ impl GeminiClient {
         if !status.is_success() {
             return Err(format!("{status} {text}"));
         }
-        serde_json::from_str(&text).map_err(|e| format!("invalid response JSON: {e}"))
+        let response: Value = serde_json::from_str(&text).map_err(|e| format!("invalid response JSON: {e}"))?;
+        if response["status"] == "failed" {
+            return Err(format!("interaction failed: {}", response["errors"]));
+        }
+        Ok(response)
     }
 
     fn generate(&self, image: &[u8], mime_type: &str, prompt: &str, system_instruction: &str, mode: GeminiMode, cancel: Option<&CancelToken>, json_mode: bool) -> anyhow::Result<String> {
@@ -216,19 +230,20 @@ impl GeminiClient {
         if !settings.default_model.is_empty() && settings.default_model != models[0] {
             models.push(settings.default_model);
         }
-        let body = image_request(image, mime_type, prompt, system_instruction, json_mode);
+        let mut body = image_request(image, mime_type, prompt, system_instruction, json_mode);
 
         let mut last_error = String::new();
         for model in &models {
+            body["model"] = json!(model);
             for attempt in 0..MAX_RETRIES {
                 if cancel.is_some_and(CancelToken::is_cancelled) {
                     bail!("Operation cancelled");
                 }
-                let err = match self.post(model, &body) {
+                let err = match self.post(&body) {
                     Ok(response) => {
                         if hit_token_cap(&response) {
                             log::warn!(
-                                "OCR output truncated: model '{model}' hit the {OCR_MAX_OUTPUT_TOKENS}-token output cap (finish_reason=MAX_TOKENS); the tail of this page is missing from the extracted text. Re-run OCR on a smaller region or raise OCR_MAX_OUTPUT_TOKENS."
+                                "OCR output truncated: model '{model}' hit the {OCR_MAX_OUTPUT_TOKENS}-token output cap (status=incomplete); the tail of this page is missing from the extracted text. Re-run OCR on a smaller region or raise OCR_MAX_OUTPUT_TOKENS."
                             );
                         }
                         return Ok(response_text(&response));
@@ -238,7 +253,7 @@ impl GeminiClient {
                 match classify_failure(&err.to_lowercase(), attempt) {
                     Failure::Auth => bail!("Authentication error: {err}"),
                     Failure::Quota => bail!(
-                        "Quota exhausted for model '{model}'. This model may not have a free tier. Try switching to gemini-3.5-flash or gemini-3.1-flash-lite in Preferences > Gemini Models, or upgrade to a paid API plan."
+                        "Quota exhausted for model '{model}'. This model may not have a free tier. Try switching to a Flash-Lite model such as gemini-3.5-flash-lite in Preferences > Gemini Models, or upgrade to a paid API plan."
                     ),
                     Failure::NextModel => {
                         log::warn!("Model {model} not available, trying next");
@@ -267,12 +282,12 @@ impl GeminiClient {
         Ok(serde_json::from_str(&strip_code_fence(&text))?)
     }
 
-    /// Every model this key can call with `generateContent`, sorted, without the `models/` prefix.
+    /// Every model this key can call, sorted, without the `models/` prefix.
     pub fn list_models(&self) -> anyhow::Result<Vec<String>> {
         let mut names = Vec::new();
         let mut token = String::new();
         loop {
-            let mut req = self.agent.get(API_BASE).header("x-goog-api-key", &self.api_key).query("pageSize", "1000");
+            let mut req = self.agent.get(MODELS_URL).header("x-goog-api-key", &self.api_key).query("pageSize", "1000");
             if !token.is_empty() {
                 req = req.query("pageToken", &token);
             }
@@ -294,16 +309,17 @@ impl GeminiClient {
 
     /// Text to raw PCM (24 kHz, 16-bit, mono).
     pub fn generate_audio(&self, text: &str, voice: &str, model: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<u8>> {
-        let body = audio_request(text, voice);
+        let mut body = audio_request(text, voice);
+        body["model"] = json!(model);
         let mut last_error = String::new();
         for attempt in 0..MAX_RETRIES {
             if cancel.is_some_and(CancelToken::is_cancelled) {
                 bail!("Operation cancelled");
             }
-            let err = match self.post(model, &body) {
-                Ok(response) => match response["candidates"][0]["content"]["parts"][0]["inlineData"]["data"].as_str() {
+            let err = match self.post(&body) {
+                Ok(response) => match response_audio(&response) {
                     Some(data) => return Ok(pcm_from_audio(B64.decode(data)?)),
-                    None => format!("response has no audio data: {}", response["candidates"][0]["finishReason"]),
+                    None => format!("response has no audio data: status {}", response["status"]),
                 },
                 Err(e) => e,
             };
@@ -324,7 +340,9 @@ impl GeminiClient {
     }
 }
 
-/// Names of the models in one `models.list` page that support `generateContent`.
+/// Names of the models in one `models.list` page that support `generateContent`. The list
+/// has no Interactions flag; `generateContent` support marks the models the Interactions
+/// API serves and leaves out Live-only and embedding models.
 fn generate_content_models(page: &Value) -> Vec<String> {
     let models = page["models"].as_array().map(Vec::as_slice).unwrap_or_default();
     models
@@ -348,14 +366,15 @@ mod tests {
     #[test]
     fn model_list_keeps_generate_content_models_without_prefix() {
         let page = json!({"models": [
-            {"name": "models/gemini-3.5-flash", "supportedGenerationMethods": ["generateContent", "countTokens"]},
-            {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
-            {"name": "models/gemini-3.1-flash-tts-preview", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent", "countTokens"]},
+            {"name": "models/gemini-embedding-2", "supportedGenerationMethods": ["embedContent"]},
+            {"name": "models/gemini-3.8-live", "supportedGenerationMethods": ["bidiGenerateContent"]},
+            {"name": "models/gemini-3.8-flash-lite-tts", "supportedGenerationMethods": ["generateContent"]},
             {"name": "models/no-methods"}
         ]});
-        assert_eq!(generate_content_models(&page), ["gemini-3.5-flash", "gemini-3.1-flash-tts-preview"]);
+        assert_eq!(generate_content_models(&page), ["gemini-3.8-flash", "gemini-3.8-flash-lite-tts"]);
         assert_eq!(generate_content_models(&json!({})), Vec::<String>::new());
-        assert!(is_tts_model("gemini-3.1-flash-tts-preview") && !is_tts_model("gemini-3.5-flash"));
+        assert!(is_tts_model("gemini-3.8-flash-lite-tts") && !is_tts_model("gemini-3.8-flash"));
     }
 
     #[test]
@@ -364,39 +383,70 @@ mod tests {
         assert_eq!(classify_failure("429 {\"status\": \"resource_exhausted\"}", 2), Failure::Quota);
         assert_eq!(classify_failure("quota exceeded, limit: 0", 0), Failure::Quota);
         assert_eq!(classify_failure("404 models/x is not found for api version v1beta", 0), Failure::NextModel);
+        // The Interactions API's wording for an unknown model, captured live.
+        assert_eq!(classify_failure("404 not found {\"error\":{\"message\":\"model 'x' not found.\",\"code\":\"not_found\"}}", 0), Failure::NextModel);
         assert_eq!(classify_failure("404 models/x is not found", 1), Failure::Retry { delay_secs: 2.0 });
         assert_eq!(classify_failure("503 unavailable", 0), Failure::Retry { delay_secs: 1.0 });
         assert_eq!(classify_failure("timeout", 2), Failure::Retry { delay_secs: 4.0 });
     }
 
     #[test]
-    fn image_request_matches_gemini_rest_shape() {
+    fn image_request_matches_interactions_shape() {
         let body = image_request(b"\x89PNG", "image/png", "Extract.", "You are OCR.", true);
         assert_eq!(
             body,
             json!({
-                "contents": [{ "role": "user", "parts": [
-                    { "inlineData": { "mimeType": "image/png", "data": "iVBORw==" } },
-                    { "text": "Extract." },
-                ]}],
-                "generationConfig": { "maxOutputTokens": 32768, "temperature": 0.1, "responseMimeType": "application/json" },
-                "systemInstruction": { "parts": [{ "text": "You are OCR." }] },
+                "input": [
+                    { "type": "image", "mime_type": "image/png", "data": "iVBORw==" },
+                    { "type": "text", "text": "Extract." },
+                ],
+                "generation_config": { "max_output_tokens": 32768 },
+                "response_format": { "type": "text", "mime_type": "application/json" },
+                "system_instruction": "You are OCR.",
+                "store": false,
             })
         );
-        assert!(image_request(b"", "image/png", "p", "", false).get("systemInstruction").is_none());
+        let plain = image_request(b"", "image/png", "p", "", false);
+        assert!(plain.get("system_instruction").is_none() && plain.get("response_format").is_none());
+    }
+
+    #[test]
+    fn audio_request_matches_interactions_shape() {
+        assert_eq!(
+            audio_request("Hi.", "Kore"),
+            json!({
+                "input": [{ "type": "user_input", "content": [{ "type": "text", "text": "Hi." }] }],
+                "response_format": { "type": "audio" },
+                "generation_config": { "speech_config": [{ "voice": "Kore" }] },
+                "store": false,
+            })
+        );
     }
 
     #[test]
     fn canned_response_text_and_token_cap() {
-        let resp = json!({ "candidates": [{
-            "content": { "parts": [{ "text": "plan", "thought": true }, { "text": "[H1]Hi" }, { "text": "[/H1]" }] },
-            "finishReason": "MAX_TOKENS",
-        }]});
+        // Shape of a live gemini-3.5-flash-lite reply cut off by max_output_tokens.
+        let resp = json!({ "status": "incomplete", "steps": [
+            { "type": "thought", "signature": "Em==" },
+            { "type": "model_output", "content": [{ "type": "text", "text": "[H1]Hi" }] },
+            { "type": "model_output", "content": [{ "type": "text", "text": "[/H1]" }] },
+        ]});
         assert_eq!(response_text(&resp), "[H1]Hi[/H1]");
         assert!(hit_token_cap(&resp));
-        let done = json!({ "candidates": [{ "content": { "parts": [] }, "finishReason": "STOP" }] });
+        let done = json!({ "status": "completed", "steps": [{ "type": "thought", "signature": "Em==" }] });
         assert_eq!(response_text(&done), "");
         assert!(!hit_token_cap(&done));
+    }
+
+    #[test]
+    fn canned_response_audio_takes_last_audio_block() {
+        let resp = json!({ "status": "completed", "steps": [{ "type": "model_output", "content": [
+            { "type": "text", "text": "ignored" },
+            { "type": "audio", "mime_type": "audio/wav", "data": "AAA=" },
+            { "type": "audio", "mime_type": "audio/wav", "data": "BBB=" },
+        ]}]});
+        assert_eq!(response_audio(&resp), Some("BBB="));
+        assert_eq!(response_audio(&json!({ "status": "completed", "steps": [] })), None);
     }
 
     #[test]

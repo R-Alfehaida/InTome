@@ -6,7 +6,7 @@ The full feature and shortcut guide is in [resources/user_guide.md](resources/us
 
 ## Build and run
 
-You need Windows 10 or 11, Rust (stable, MSVC toolchain), the Visual Studio C++ build tools with a C++23 compiler, and CMake 3.24 or newer on PATH. The build compiles the prism speech library from source (through the `prismer` crate) and links it into the exe.
+You need Windows 10 or 11, Rust (stable, MSVC toolchain), the Visual Studio 2022 C++ build tools (17.11 or newer) with the "C++ ATL" component, and CMake 4.2 or newer. The build compiles the prism speech library from source (through the `prismer` crate) and links it into the exe. Prism is C23, and CMake only passes MSVC its C23 flag from 4.2 on; earlier versions fail with "requires the language dialect C23". If an older CMake comes first on PATH (Strawberry Perl ships one), set `CMAKE` to the newer `cmake.exe`.
 
 ```
 cargo build --release

@@ -219,14 +219,15 @@ impl Default for DocumentSettings {
 }
 
 impl Default for Gemini {
-    // Model defaults chosen for OCR cost and latency (see Prism CLAUDE.md, June 2026).
+    // Model defaults chosen for OCR cost and latency, following Google's
+    // migration table as of October 2026. Keep `RETIRED_MODEL_DEFAULTS` in step.
     fn default() -> Self {
         Self {
             api_key_encrypted: String::new(),
-            default_model: "gemini-3.1-flash-lite".into(),
-            speed_model: "gemini-3.1-flash-lite".into(),
-            accuracy_model: "gemini-3.5-flash".into(),
-            tts_model: "gemini-3.1-flash-tts-preview".into(),
+            default_model: "gemini-3.5-flash-lite".into(),
+            speed_model: "gemini-3.5-flash-lite".into(),
+            accuracy_model: "gemini-3.8-flash".into(),
+            tts_model: "gemini-3.8-flash-lite-tts".into(),
             default_mode: GeminiMode::Speed,
             max_concurrent_pages: 3,
             timeout_seconds: 60,
@@ -314,14 +315,35 @@ static STORE: LazyLock<RwLock<Store>> = LazyLock::new(|| {
     RwLock::new(Store { path, settings })
 });
 
+/// Earlier default model IDs and their current defaults. `save` writes every field,
+/// so a user who never chose a model would otherwise stay on the old default forever.
+const RETIRED_MODEL_DEFAULTS: [(&str, &str); 3] = [
+    ("gemini-3.1-flash-lite", "gemini-3.5-flash-lite"),
+    ("gemini-3.5-flash", "gemini-3.8-flash"),
+    ("gemini-3.1-flash-tts-preview", "gemini-3.8-flash-lite-tts"),
+];
+
+impl Gemini {
+    /// Moves each model setting still on an earlier default to the current one.
+    fn upgrade_retired_defaults(&mut self) {
+        for model in [&mut self.default_model, &mut self.speed_model, &mut self.accuracy_model, &mut self.tts_model] {
+            if let Some((_, new)) = RETIRED_MODEL_DEFAULTS.iter().find(|(old, _)| model == old) {
+                *model = new.to_string();
+            }
+        }
+    }
+}
+
 fn load(path: &std::path::Path) -> Settings {
-    match std::fs::read_to_string(path) {
+    let mut settings = match std::fs::read_to_string(path) {
         Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
             log::warn!("config {} unreadable ({e}); using defaults", path.display());
             Settings::default()
         }),
         Err(_) => Settings::default(),
-    }
+    };
+    settings.gemini.upgrade_retired_defaults();
+    settings
 }
 
 fn save(store: &Store) {
@@ -365,6 +387,19 @@ mod tests {
         assert_eq!(s.display.font_face, "Consolas");
         assert_eq!(s.ocr.backend, OcrBackend::Auto);
         assert_eq!(s.ocr.render_dpi, 300);
+    }
+
+    #[test]
+    fn retired_default_models_upgrade_and_chosen_ones_stay() {
+        let mut g: Gemini = toml::from_str(
+            "default_model = \"gemini-3.1-flash-lite\"\naccuracy_model = \"gemini-3.5-flash\"\nspeed_model = \"gemini-3.1-pro-preview\"\ntts_model = \"gemini-3.1-flash-tts-preview\"\n",
+        )
+        .unwrap();
+        g.upgrade_retired_defaults();
+        assert_eq!(g.default_model, "gemini-3.5-flash-lite");
+        assert_eq!(g.accuracy_model, "gemini-3.8-flash");
+        assert_eq!(g.speed_model, "gemini-3.1-pro-preview");
+        assert_eq!(g.tts_model, "gemini-3.8-flash-lite-tts");
     }
 
     #[test]

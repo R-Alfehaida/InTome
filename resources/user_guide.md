@@ -243,6 +243,12 @@ To use OCR, AI form labeling, Gemini TTS, and audio exports:
 3. Enter your key in the Gemini API Key field; it is saved when the field loses focus or when you press OK
 4. The key is stored encrypted on your machine using Windows DPAPI
 
+### Gemini Models
+
+The Gemini Models page lists the models your key can use. By default InTome uses Gemini 3.5 Flash-Lite for fast OCR and as the fallback model, Gemini 3.8 Flash for accurate OCR, and Gemini 3.8 Flash-Lite TTS for speech. When InTome starts, it moves any model setting that holds an earlier default (Gemini 3.1 Flash-Lite, Gemini 3.5 Flash or Gemini 3.1 Flash TTS Preview) to its current replacement. Any other model you picked stays as it is.
+
+InTome asks Gemini not to store your requests, so pages and text you send for OCR, form labeling or speech are not kept on Google's servers for later retrieval.
+
 ## Accessibility
 
 InTome is designed from the ground up for screen reader users:
