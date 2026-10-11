@@ -1,7 +1,7 @@
 //! The reading area of one open document (one per tab): a read-only RichEdit
 //! showing one page at a time, page turns, single-key structured navigation,
-//! section navigation, search and continuous reading. Port of
-//! prism/gui/content_view.py.
+//! section navigation, search, continuous reading and whole-document Select
+//! All. Port of prism/gui/content_view.py.
 //!
 //! Positions are char indices into `Page::text` everywhere except the calls
 //! into [`RichEdit`], which take control offsets.
@@ -24,7 +24,7 @@ use crate::document::Document;
 use crate::events::{self, AppEvent};
 use crate::navigation::element_nav::{self, find_section_bounds, get_toc_entries_flat};
 use crate::navigation::search::{SearchEngine, SearchMatch};
-use crate::platform::win32::a11y;
+use crate::platform::win32::{a11y, clipboard};
 use crate::platform::win32::richedit::{RichEdit, char_to_offset, offset_len, offset_to_char};
 use crate::structured_text::elements::{ElementType, HEADING_TYPES, SemanticElement};
 use crate::tts::reader::ReadingTarget;
@@ -41,6 +41,9 @@ const WM_GETDLGCODE: u32 = 0x87;
 // No DLGC_HASSETSEL, or tabbing in would select the whole page.
 const DLGC_READING: isize = 0x1 | 0x80;
 
+const VK_A: u16 = 0x41;
+const VK_C: u16 = 0x43;
+const VK_INSERT: u16 = 0x2D;
 const VK_PRIOR: u16 = 0x21;
 const VK_NEXT: u16 = 0x22;
 const VK_END: u16 = 0x23;
@@ -71,6 +74,10 @@ pub enum KeyAction {
     PrevSection,
     SectionStart,
     SectionEnd,
+    /// Ctrl+A: the whole document, not just the page in the control.
+    SelectAll,
+    /// Ctrl+C or Ctrl+Insert. Left to the RichEdit unless the whole document is selected.
+    Copy,
 }
 
 /// Maps a key to its reading action. `on_first_line` is whether the caret sits
@@ -87,6 +94,8 @@ pub fn key_action(k: Key, on_first_line: bool) -> Option<KeyAction> {
         VK_PRIOR if k.alt => Some(KeyAction::PrevSection),
         VK_HOME if k.alt => Some(KeyAction::SectionStart),
         VK_END if k.alt => Some(KeyAction::SectionEnd),
+        VK_A if k.ctrl && !k.alt && !k.shift => Some(KeyAction::SelectAll),
+        VK_C | VK_INSERT if k.ctrl && !k.alt && !k.shift => Some(KeyAction::Copy),
         _ if k.ctrl || k.alt => None,
         vk => {
             let types = match vk as u8 {
@@ -127,6 +136,36 @@ fn shown_text(text: &str) -> std::borrow::Cow<'_, str> {
     if text.ends_with(['\n', '\r']) { text.into() } else { format!("{text}\n").into() }
 }
 
+/// "1 page", "42 pages".
+fn pages(n: usize) -> String {
+    if n == 1 { "1 page".into() } else { format!("{n} pages") }
+}
+
+/// Every page's text as one document. Pages split from one text
+/// (`document::utils::paginate_text`) end in whitespace and join back exactly;
+/// a page ending mid-line, as PDF pages do, gets a blank line before the next.
+fn join_pages(pages: &[String]) -> String {
+    let mut out = String::new();
+    for page in pages.iter().filter(|p| !p.is_empty()) {
+        if !out.is_empty() && !out.ends_with(char::is_whitespace) {
+            out.push_str("\n\n");
+        }
+        out.push_str(page);
+    }
+    out
+}
+
+/// What InTome says after copying the whole document. `missing` is how many
+/// pages still have no text because they wait for OCR.
+fn copied_message(page_count: usize, missing: usize) -> String {
+    let copied = format!("Copied entire document, {}", pages(page_count));
+    match missing {
+        0 => copied,
+        1 => format!("{copied}. 1 page has no text yet and needs OCR."),
+        n => format!("{copied}. {n} pages have no text yet and need OCR."),
+    }
+}
+
 /// "Heading 2: Introduction", the element's text cut at 80 chars.
 pub fn element_announcement(e: &SemanticElement) -> String {
     format!("{}: {}", e.element_type.label(), e.text.chars().take(80).collect::<String>())
@@ -153,6 +192,9 @@ pub struct ContentView {
     last_turn: Cell<Option<Instant>>,
     /// The `WM_CHAR` of a key we already handled, so the read-only control does not beep.
     eat_char: Cell<bool>,
+    /// Ctrl+A selected every page. The control only holds the current page, so
+    /// this is InTome's selection, shown as a highlight; any caret move ends it.
+    whole_doc: Cell<bool>,
 }
 
 impl ContentView {
@@ -171,6 +213,7 @@ impl ContentView {
             end_announced: Cell::new(false),
             last_turn: Cell::new(None),
             eat_char: Cell::new(false),
+            whole_doc: Cell::new(false),
         });
         view.apply_font();
         let weak = Rc::downgrade(&view);
@@ -244,6 +287,8 @@ impl ContentView {
 
     pub fn show_current_page(&self) {
         self.end_announced.set(false);
+        // New text drops the highlight, and the caret moves to the page start.
+        self.whole_doc.set(false);
         self.edit.set_text(&shown_text(&self.current_text()));
         self.edit.set_selection(0, 0);
         events::emit(AppEvent::PageChanged { page_num: self.page.get() + 1, page_count: self.page_count() });
@@ -318,6 +363,8 @@ impl ContentView {
     }
 
     pub fn select(&self, start: usize, end: usize) {
+        // Set first: an unchanged selection raises no event to end it.
+        self.whole_doc.set(false);
         let text = self.current_text();
         self.edit.set_selection(char_to_offset(&text, start), char_to_offset(&text, end));
     }
@@ -325,10 +372,48 @@ impl ContentView {
     /// Puts the caret at `start` and paints `start..end` (chars) as a visual
     /// highlight that screen readers do not announce, unlike a selection.
     pub fn mark(&self, start: usize, end: usize) {
+        self.whole_doc.set(false);
         let text = self.current_text();
         let (s, e) = (char_to_offset(&text, start), char_to_offset(&text, end));
         self.edit.set_selection(s, s);
         self.edit.set_highlight(s, e);
+    }
+
+    /// Whether Ctrl+A selected the whole document and the caret has not moved since.
+    pub fn whole_document_selected(&self) -> bool {
+        self.whole_doc.get()
+    }
+
+    /// Selects every page. The current page is painted, not selected: a
+    /// selection would make the screen reader read the whole page aloud as
+    /// "selected" over the announcement.
+    pub fn select_all_document(&self) {
+        let shown = offset_len(&shown_text(&self.current_text()));
+        self.edit.set_highlight(0, shown);
+        self.whole_doc.set(true);
+        events::announce(format!("Selected entire document, {}", pages(self.page_count())));
+    }
+
+    /// Copies the whole document when it is selected, else the control's own selection.
+    pub fn copy(&self) {
+        if !self.whole_doc.get() {
+            self.edit.copy();
+            return;
+        }
+        let (text, count, missing) = {
+            let mut doc = self.doc.borrow_mut();
+            let count = doc.page_count();
+            let texts: Vec<String> = (0..count).map(|i| doc.page(i).text.clone()).collect();
+            let missing = doc.ocr_page_indices().into_iter().filter(|&i| texts.get(i).is_some_and(|t| t.trim().is_empty())).count();
+            (join_pages(&texts), count, missing)
+        };
+        match clipboard::set_text(self.edit.0, &text) {
+            Ok(()) => events::announce(copied_message(count, missing)),
+            Err(e) => {
+                log::error!("copying the document to the clipboard failed: {e:#}");
+                events::announce("Could not copy to the clipboard.");
+            }
+        }
     }
 
     /// The selected text, sliced from the page by char index. Slicing the page
@@ -351,6 +436,9 @@ impl ContentView {
 
     /// Called for every `EN_SELCHANGE` with control offsets.
     pub fn on_sel_change(&self, cp_min: usize, cp_max: usize) {
+        if self.whole_doc.replace(false) {
+            self.edit.set_highlight(0, 0);
+        }
         let line = self.edit.line_from_offset(cp_min);
         events::emit(AppEvent::CaretMoved { line, col: cp_min.saturating_sub(self.edit.line_start(line)) });
         self.maybe_advance(cp_min, cp_max);
@@ -392,7 +480,10 @@ impl ContentView {
                 let key = Key { vk: wparam as u16, ctrl: down(VK_CONTROL.0), shift: down(VK_SHIFT.0), alt: down(VK_MENU.0) };
                 let (caret, _) = self.edit.selection();
                 let action = key_action(key, self.edit.line_from_offset(caret) == 0)?;
-                self.eat_char.set(matches!(action, KeyAction::Element { .. }));
+                if action == KeyAction::Copy && !self.whole_doc.get() {
+                    return None;
+                }
+                self.eat_char.set(matches!(action, KeyAction::Element { .. } | KeyAction::SelectAll | KeyAction::Copy));
                 self.run(action);
                 Some(0)
             }
@@ -412,6 +503,8 @@ impl ContentView {
                     events::announce("First page");
                 }
             }
+            KeyAction::SelectAll => self.select_all_document(),
+            KeyAction::Copy => self.copy(),
             KeyAction::FirstPage => {
                 self.go_to_page(0);
             }
@@ -618,6 +711,32 @@ mod tests {
         assert_eq!(key_action(key(b'3' as u16, false, false, false), false), Some(KeyAction::Element { types: vec![ElementType::Heading3], reverse: false }));
         assert_eq!(key_action(key(b'K' as u16, true, false, false), false), None); // Ctrl+K is not a reading key
         assert_eq!(key_action(key(b'Z' as u16, false, false, false), false), None);
+    }
+
+    #[test]
+    fn select_all_and_copy_keys() {
+        assert_eq!(key_action(key(VK_A, true, false, false), false), Some(KeyAction::SelectAll));
+        assert_eq!(key_action(key(VK_A, false, false, false), false), None); // plain A is not a reading key
+        assert_eq!(key_action(key(VK_A, true, true, false), false), None);
+        assert_eq!(key_action(key(VK_C, true, false, false), false), Some(KeyAction::Copy));
+        assert_eq!(key_action(key(VK_INSERT, true, false, false), false), Some(KeyAction::Copy));
+        assert_eq!(key_action(key(VK_INSERT, false, true, false), false), None); // Shift+Insert pastes
+    }
+
+    #[test]
+    fn pages_join_into_one_document() {
+        let split = ["One para.\n\n", "Two runs on \n", "and on."].map(String::from);
+        assert_eq!(join_pages(&split), "One para.\n\nTwo runs on \nand on.");
+        let pdf = ["Page one", "", "Page three\n", "Page four"].map(String::from);
+        assert_eq!(join_pages(&pdf), "Page one\n\nPage three\nPage four");
+        assert_eq!(join_pages(&[]), "");
+    }
+
+    #[test]
+    fn copy_message_counts_pages_waiting_for_ocr() {
+        assert_eq!(copied_message(1, 0), "Copied entire document, 1 page");
+        assert_eq!(copied_message(12, 1), "Copied entire document, 12 pages. 1 page has no text yet and needs OCR.");
+        assert_eq!(copied_message(12, 3), "Copied entire document, 12 pages. 3 pages have no text yet and need OCR.");
     }
 
     #[test]

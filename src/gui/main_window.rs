@@ -70,6 +70,8 @@ pub enum Cmd {
     CloseTab,
     Exit,
     Find,
+    SelectAll,
+    Copy,
     Sidebar,
     ElementList,
     Preferences,
@@ -106,10 +108,10 @@ pub enum Cmd {
     SkipBackward,
 }
 
-const ALL_CMDS: [Cmd; 39] = {
+const ALL_CMDS: [Cmd; 41] = {
     use Cmd::*;
     [
-        Open, Export, BatchConvert, CloseTab, Exit, Find, Sidebar, ElementList, Preferences, QuickBookmark, NamedBookmark, AddNote, SaveQuote,
+        Open, Export, BatchConvert, CloseTab, Exit, Find, SelectAll, Copy, Sidebar, ElementList, Preferences, QuickBookmark, NamedBookmark, AddNote, SaveQuote,
         ListBookmarks, ListNotes, ListQuotes, ExportAnnotations, TtsRead, TtsPause, TtsStop, VoiceProfiles, RunOcr, CancelOcr, LabelFields,
         FillForm, ClearCache, UserGuide, Shortcuts, CheckUpdates, About, FindNext, FindPrev, FocusNext, FocusPrev, NextTab, PrevTab, Escape,
         SkipForward, SkipBackward,
@@ -251,6 +253,11 @@ const MENUS: &[(&str, &[M])] = {
             "&Edit",
             &[
                 Item(Find, "&Find"),
+                Sep,
+                // Keys handled by the reading control, not the accelerator table, so
+                // edit boxes keep their own Ctrl+A and Ctrl+C.
+                Item(Copy, "&Copy\tCtrl+C"),
+                Item(SelectAll, "Select &All\tCtrl+A"),
                 Sep,
                 Sub("&View Options", &[Item(Sidebar, "&Sidebar"), Item(ElementList, "Element &List")]),
                 Sep,
@@ -865,6 +872,11 @@ impl MainWindow {
             Cmd::CloseTab => self.close_tab(),
             Cmd::Exit => self.0.wnd.close(),
             Cmd::Find => self.open_find(),
+            Cmd::SelectAll | Cmd::Copy => match self.active_view() {
+                Some(v) if cmd == Cmd::SelectAll => v.select_all_document(),
+                Some(v) => v.copy(),
+                None => announce("No document open"),
+            },
             Cmd::Sidebar => self.toggle_sidebar(),
             Cmd::ElementList => self.on_element_list(),
             Cmd::Preferences => {
@@ -1611,12 +1623,20 @@ impl MainWindow {
 
     fn save_quote(&self) {
         let Some((v, hash, page, _)) = self.annotation_context() else { return };
-        let selected = v.selected_text();
+        // A quote is stored against one page, so a whole-document selection saves the current page.
+        let whole_doc = v.whole_document_selected();
+        let (selected, start, end) = if whole_doc {
+            let text = v.page_text(page);
+            let len = text.chars().count();
+            (text, 0, len)
+        } else {
+            let (start, end) = v.selection();
+            (v.selected_text(), start, end)
+        };
         if selected.is_empty() {
-            return announce("No text selected");
+            return announce(if whole_doc { "This page has no text to quote" } else { "No text selected" });
         }
-        let (start, end) = v.selection();
-        if let Some(tags) = annotation_dialogs::save_quote(self.wnd(), &selected, page + 1) {
+        if let Some(tags) = annotation_dialogs::save_quote(self.wnd(), &selected, page + 1, whole_doc) {
             report(AnnotationManager::global().save_quote(&hash, page, start, end, &selected, &tags), "save the quote");
         }
     }

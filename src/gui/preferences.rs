@@ -15,7 +15,7 @@ use crate::events;
 use crate::export;
 use crate::gui::dialog::{self, spin_value, Column, DialogBuilder, GAP, MARGIN, ROW_H};
 use crate::gui::export_dialog::set_text;
-use crate::platform::win32::a11y;
+use crate::platform::win32::{a11y, to_crlf};
 use crate::tts::profiles::ProfileManager;
 
 const PAGES: [&str; 9] = ["General", "Display", "Document", "Gemini Models", "OCR", "AI Providers", "Text-to-Speech", "Export", "Privacy"];
@@ -128,11 +128,6 @@ fn commit(old: &Settings, new: &Settings) {
 /// The dialog window that owns `page`, for message boxes and pickers.
 fn owner(page: &Page) -> w::HWND {
     page.parent().hwnd().GetAncestor(co::GA::ROOT).unwrap_or(w::HWND::NULL)
-}
-
-/// Edit controls want CRLF; settings keep LF.
-fn to_crlf(s: &str) -> String {
-    s.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
 fn general(p: &Page, cfg: &Settings) -> Save {
@@ -524,10 +519,5 @@ mod tests {
         assert_eq!(spacing_index(1.2), 2);
         assert_eq!(spacing_index(3.0), 20);
         assert_eq!(spacing_index(7.5), 20);
-    }
-
-    #[test]
-    fn multiline_text_gets_crlf_once() {
-        assert_eq!(to_crlf("a\nb\r\nc"), "a\r\nb\r\nc");
     }
 }

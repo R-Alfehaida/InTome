@@ -23,7 +23,7 @@ You can have multiple documents open at the same time, each in its own tab. Use 
 InTome's menus are organized to keep related commands together and reduce the number of top-level menus you tab through:
 
 - **File** -- Open, Recent Files, Export, Batch Convert, Close Tab, Exit
-- **Edit** -- Find, View Options (a submenu with the Sidebar toggle and Element List), Preferences
+- **Edit** -- Find, Copy, Select All, View Options (a submenu with the Sidebar toggle and Element List), Preferences
 - **Reference** -- bookmarks, notes, quotes, and Export Annotations
 - **Text-to-Speech** -- Read, Pause/Resume, Stop Reading, and Voice Profiles
 - **Tools** -- Run OCR, Cancel OCR, Label / Scan Form Fields, Fill Form, Clear Cache
@@ -41,6 +41,17 @@ Most menu items also have a keyboard shortcut, listed in the sections below.
 | Ctrl+End | Last page |
 
 The status bar at the bottom shows the current page number and total page count.
+
+## Selecting and Copying
+
+| Key | Action |
+|-----|--------|
+| Ctrl+A | Select the entire document |
+| Ctrl+C or Ctrl+Insert | Copy the selection |
+
+InTome shows one page at a time, but **Ctrl+A** selects every page, not just the one on screen. InTome says "Selected entire document" with the page count, and the current page is highlighted. Press **Ctrl+C** to copy the whole document to the clipboard. If some pages of a scanned document have no text yet because OCR hasn't run on them, InTome tells you how many were left out.
+
+Moving the cursor, turning the page or making a new selection ends the whole-document selection. Shift with the arrow keys still selects text on the current page as usual, and Ctrl+C copies just that.
 
 ## Focus Areas
 
@@ -127,6 +138,8 @@ InTome lets you bookmark pages, add notes, and save quotes. These commands live 
 | Ctrl+Shift+B | Named bookmark (prompts for name) |
 | Ctrl+M | Add a note at cursor position |
 | Ctrl+Shift+H | Save selected text as a quote |
+
+A quote belongs to one page. If you press Ctrl+Shift+H after selecting the entire document with Ctrl+A, InTome saves the current page as the quote, and the dialog's title says so.
 
 ### Viewing Annotations
 

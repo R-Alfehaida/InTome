@@ -11,7 +11,7 @@ use winsafe::{self as w, gui, prelude::*};
 use crate::annotation::models::{Bookmark, Note, Quote};
 use crate::events;
 use crate::gui::dialog::{BUTTON_W, DialogBuilder};
-use crate::platform::win32::a11y;
+use crate::platform::win32::{a11y, to_crlf};
 
 /// What the user did in a list dialog. The caller applies deletions and edits
 /// through `AnnotationManager`, then navigates to `go_to_page` if set (Go To).
@@ -30,9 +30,19 @@ pub fn add_note(parent: &impl GuiParent, page_num: usize) -> Option<String> {
 }
 
 /// Confirms saving `selected_text` as a quote and asks for tags; `None` when cancelled.
-pub fn save_quote(parent: &impl GuiParent, selected_text: &str, page_num: usize) -> Option<String> {
-    let d = DialogBuilder::new("Save Quote", 480);
-    let quote = d.multiline(&format!("Saving quote from page {page_num}:"), selected_text, 80, true);
+/// `page_only` says the whole document was selected but only page `page_num` is saved;
+/// the title carries it because the screen reader reads the title when the dialog opens.
+pub fn save_quote(parent: &impl GuiParent, selected_text: &str, page_num: usize, page_only: bool) -> Option<String> {
+    let (title, label) = if page_only {
+        (
+            format!("Save Quote: page {page_num} only"),
+            format!("A quote holds one page. Saving page {page_num}:"),
+        )
+    } else {
+        ("Save Quote".to_string(), format!("Saving quote from page {page_num}:"))
+    };
+    let d = DialogBuilder::new(&title, 480);
+    let quote = d.multiline(&label, &to_crlf(selected_text), 80, true);
     let tags = d.edit("&Tags (comma-separated):", "");
     d.ok_cancel("OK");
     // As in Prism, land on Tags: the quote is context, the tags are the input.
@@ -323,7 +333,7 @@ impl ListUi {
         let Some((_, i)) = self.selected() else { return };
         let quote = self.items.borrow()[i].clone();
         let d = DialogBuilder::new(&format!("Quote \u{2014} page {}", quote.page_index + 1), 480);
-        d.multiline("Quote &text:", &quote.text, 160, true);
+        d.multiline("Quote &text:", &to_crlf(&quote.text), 160, true);
         if !quote.tags.is_empty() {
             d.text(&format!("Tags: {}", quote.tags));
         }

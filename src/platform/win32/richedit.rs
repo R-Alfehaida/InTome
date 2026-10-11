@@ -47,6 +47,7 @@ const CFM_SIZE: u32 = 0x8000_0000;
 const CFM_FACE: u32 = 0x2000_0000;
 const ST_UNICODE: u32 = 8;
 const WM_NCDESTROY: u32 = 0x82;
+const WM_COPY: u32 = 0x301;
 
 /// `EN_SELCHANGE`, sent to the parent in a `SELCHANGE` block.
 pub const EN_SELCHANGE: i32 = 0x0702;
@@ -204,6 +205,11 @@ impl RichEdit {
         });
         self.send(EM_SETREADONLY, 1, 0);
         painted
+    }
+
+    /// Copies the selection to the clipboard, as Ctrl+C does.
+    pub fn copy(self) {
+        self.send(WM_COPY, 0, 0);
     }
 
     /// Selects `start..end` (control offsets) and scrolls it into view.

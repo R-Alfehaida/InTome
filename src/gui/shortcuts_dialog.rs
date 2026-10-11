@@ -12,6 +12,8 @@ const SHORTCUTS: &[(&str, &str, &str)] = &[
     ("File", "Ctrl+Shift+S", "Export document"),
     ("File", "Ctrl+Shift+P", "Batch convert"),
     ("File", "Alt+F4", "Exit"),
+    ("Edit", "Ctrl+A", "Select entire document"),
+    ("Edit", "Ctrl+C", "Copy selection, or the entire document after Ctrl+A"),
     ("Edit", "Ctrl+F", "Find in document"),
     ("Edit", "F3 / Shift+F3", "Find next / previous"),
     ("Edit", "Ctrl+Shift+E", "Element list"),

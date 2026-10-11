@@ -5,6 +5,7 @@ use winsafe::prelude::*;
 
 use crate::events;
 use crate::gui::dialog::{DialogBuilder, IDOK};
+use crate::platform::win32::to_crlf;
 
 /// Shows a modal error and announces "Error: {title}. {message}". `details`
 /// goes in a read-only box; `next_steps` are listed numbered.
@@ -13,7 +14,7 @@ pub fn show_error(parent: &impl GuiParent, title: &str, message: &str, details: 
     let col = d.column();
     col.text(message, wrapped_lines(message));
     if let Some(details) = details.filter(|d| !d.is_empty()) {
-        d.multiline("Technical &details:", &details.replace("\r\n", "\n").replace('\n', "\r\n"), 90, true);
+        d.multiline("Technical &details:", &to_crlf(details), 90, true);
     }
     if !next_steps.is_empty() {
         col.text("Suggested next steps:", 1);
