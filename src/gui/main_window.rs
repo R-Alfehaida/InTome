@@ -791,11 +791,24 @@ impl MainWindow {
         self.0.toc.select_page(v.current_page());
     }
 
+    /// Window title and status-bar file name for the active document. Screen
+    /// readers speak the title, so it follows the active tab.
+    fn show_document_identity(&self, v: &ContentView) {
+        let meta = v.with_doc(|d| d.metadata());
+        let title = if meta.title.is_empty() { v.filename.clone() } else { meta.title.clone() };
+        let _ = self.hwnd().SetWindowText(&if meta.author.is_empty() {
+            format!("{title} - {APP_NAME}")
+        } else {
+            format!("{title} by {} - {APP_NAME}", meta.author)
+        });
+        self.set_status(0, &if meta.format.is_empty() { v.filename.clone() } else { format!("{} [{}]", v.filename, meta.format) });
+    }
+
     fn on_tab_changed(&self, index: usize) {
         let Some(v) = self.0.views.borrow().get(index).cloned() else { return };
         self.activate(index);
         self.sync_toc(&v);
-        self.set_status(0, &v.filename);
+        self.show_document_identity(&v);
         self.show_page_state(v.current_page() + 1, v.page_count());
         events::emit(AppEvent::TabSwitched { tab_index: index, filename: v.filename.clone() });
         announce(v.filename.clone());
@@ -822,27 +835,34 @@ impl MainWindow {
         unsafe {
             let _ = self.0.tabs.hwnd().SendMessage(msg::TcmDeleteItem { index: index as u32 });
         }
-        v.close();
-        events::emit(AppEvent::DocumentClosed { filename: v.filename.clone() });
+        // Focus moves straight to its new home before the closed control is
+        // hidden or destroyed. Losing the focused control first hands focus to
+        // the main window, which gives it to the contents tree, so the screen
+        // reader starts announcing the tree on the way to the next document.
         let remaining = self.0.views.borrow().len();
         if remaining == 0 {
             self.0.active.set(None);
             self.0.toc.clear();
+            self.0.progress.reset();
             self.set_status(0, "");
             self.set_status(1, "");
             let _ = self.hwnd().SetWindowText(APP_NAME);
-            self.layout();
-            // The closed control had focus; keep the keyboard somewhere useful.
             let _ = if self.0.sidebar.get() { self.0.toc.tree.focus() } else { self.0.progress.slider.focus() };
         } else {
             let next = index.min(remaining - 1);
             self.activate(next);
-            if let Some(v) = self.active_view() {
-                self.sync_toc(&v);
-                self.show_page_state(v.current_page() + 1, v.page_count());
-                v.focus();
+            if let Some(next) = self.active_view() {
+                self.sync_toc(&next);
+                self.show_document_identity(&next);
+                self.show_page_state(next.current_page() + 1, next.page_count());
+                next.focus();
             }
         }
+        v.close();
+        self.layout();
+        // Repaint where the closed control was; nothing else covers that area when no document is left.
+        let _ = self.hwnd().InvalidateRect(None, true);
+        events::emit(AppEvent::DocumentClosed { filename: v.filename.clone() });
     }
 
     // Pages
@@ -1276,13 +1296,8 @@ impl MainWindow {
         }
         let page_count = view.page_count();
 
-        let _ = self.hwnd().SetWindowText(&if meta.author.is_empty() {
-            format!("{title} - {APP_NAME}")
-        } else {
-            format!("{title} by {} - {APP_NAME}", meta.author)
-        });
+        self.show_document_identity(&view);
         config::update("recent_files", |s| s.add_recent_file(&path.to_string_lossy()));
-        self.set_status(0, &if meta.format.is_empty() { filename.clone() } else { format!("{filename} [{}]", meta.format) });
 
         events::emit(AppEvent::DocumentOpened { filename: filename.clone(), page_count });
         events::emit(AppEvent::DocumentLoaded { path: path.to_string_lossy().into_owned(), filename: filename.clone() });

@@ -93,6 +93,10 @@ Start-Sleep -Milliseconds $LoadMs
 foreach ($step in $Steps.Split(';')) {
     $keys, $wait = $step.Trim().Split('@')
     $wait = if ($wait) { [int]$wait } else { $StepMs }
+    # Closing or opening a document retitles the window; follow the process, or
+    # press_keys finds no window and later steps silently press nothing.
+    $proc.Refresh()
+    if ($proc.MainWindowTitle) { $title = $proc.MainWindowTitle }
     & $capture -Mark -Text "step: $keys"
     & $press -WindowTitle $title -Keys $keys -DelayMs $KeyDelayMs | Out-Null
     Start-Sleep -Milliseconds $wait

@@ -41,6 +41,13 @@ impl ProgressBar {
         let _ = self.label.hwnd().SetWindowText(&format!("{} %", percent(page_num, page_count)));
     }
 
+    /// Empties the slider and label for when no document is open.
+    pub fn reset(&self) {
+        self.slider.set_range(0, 100);
+        self.slider.set_pos(0);
+        let _ = self.label.hwnd().SetWindowText("0 %");
+    }
+
     /// The 0-based page the user moved the slider to.
     pub fn requested_page(&self) -> usize {
         (self.slider.pos() as usize).saturating_sub(1)

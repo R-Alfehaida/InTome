@@ -18,6 +18,8 @@ The **File > Recent Files** submenu shows your recently opened documents for qui
 
 You can have multiple documents open at the same time, each in its own tab. Use **Ctrl+Tab** and **Ctrl+Shift+Tab** to switch between tabs. Close the current tab with **Ctrl+W**.
 
+When you close a tab and another document is still open, InTome moves you to that document's reading area at your place in it, and the progress slider, page count, table of contents and window title switch to it. When you close the last document, focus moves to the table of contents and the progress slider goes back to 0 %.
+
 ## The Menu Bar
 
 InTome's menus are organized to keep related commands together and reduce the number of top-level menus you tab through:
