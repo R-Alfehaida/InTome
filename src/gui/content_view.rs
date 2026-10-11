@@ -12,7 +12,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT};
@@ -23,7 +23,8 @@ use crate::config;
 use crate::document::Document;
 use crate::events::{self, AppEvent};
 use crate::navigation::element_nav::{self, find_section_bounds, get_toc_entries_flat};
-use crate::navigation::search::{SearchEngine, SearchMatch};
+use crate::navigation::reading_position::{Caret, Outcome, ReadingPosition, Speech};
+use crate::navigation::search::SearchEngine;
 use crate::platform::win32::{a11y, clipboard};
 use crate::platform::win32::richedit::{RichEdit, char_to_offset, offset_len, offset_to_char};
 use crate::structured_text::elements::{ElementType, HEADING_TYPES, SemanticElement};
@@ -113,20 +114,6 @@ pub fn key_action(k: Key, on_first_line: bool) -> Option<KeyAction> {
     }
 }
 
-/// Prism's friendly plural for "No more ..." announcements.
-fn plural(types: &[ElementType]) -> &'static str {
-    match types {
-        [ElementType::Link] => "links",
-        [ElementType::Table] => "tables",
-        [ElementType::List] => "lists",
-        [ElementType::Quote] => "blockquotes",
-        [ElementType::Figure] => "figures",
-        [ElementType::CodeBlock] => "code blocks",
-        [_] => "elements",
-        _ => "headings",
-    }
-}
-
 /// The page as the reading control shows it: ending in a line break, as
 /// Prism's pages do. Down on the last line then has an empty line to move to,
 /// which is the end of the page; without it the caret cannot reach the end by
@@ -134,32 +121,6 @@ fn plural(types: &[ElementType]) -> &'static str {
 /// page text are unchanged.
 fn shown_text(text: &str) -> std::borrow::Cow<'_, str> {
     if text.ends_with(['\n', '\r']) { text.into() } else { format!("{text}\n").into() }
-}
-
-/// Percent (0-100) of the document before char `caret` of page `page`, where
-/// `page_chars` holds each page's length. Floor, so the last char reads 100
-/// only at the very end.
-pub fn percent_at(page_chars: &[usize], page: usize, caret: usize) -> usize {
-    let total: usize = page_chars.iter().sum();
-    if total == 0 {
-        return 0;
-    }
-    let before: usize = page_chars.iter().take(page).sum::<usize>() + caret.min(page_chars.get(page).copied().unwrap_or(0));
-    before * 100 / total
-}
-
-/// The page and char `percent` of the way through the document. 100 is the end
-/// of the last page.
-pub fn place_at(page_chars: &[usize], percent: usize) -> (usize, usize) {
-    let total: usize = page_chars.iter().sum();
-    let mut target = total * percent.min(100) / 100;
-    for (i, &len) in page_chars.iter().enumerate() {
-        if target < len || i + 1 == page_chars.len() {
-            return (i, target.min(len));
-        }
-        target -= len;
-    }
-    (0, 0)
 }
 
 /// "1 page", "42 pages".
@@ -192,11 +153,6 @@ fn copied_message(page_count: usize, missing: usize) -> String {
     }
 }
 
-/// "Heading 2: Introduction", the element's text cut at 80 chars.
-pub fn element_announcement(e: &SemanticElement) -> String {
-    format!("{}: {}", e.element_type.label(), e.text.chars().take(80).collect::<String>())
-}
-
 thread_local! {
     static LIVE: RefCell<Vec<Weak<ContentView>>> = const { RefCell::new(Vec::new()) };
 }
@@ -205,24 +161,16 @@ pub struct ContentView {
     pub edit: RichEdit,
     pub filename: String,
     doc: RefCell<Box<dyn Document>>,
-    page: Cell<usize>,
+    pos: RefCell<ReadingPosition>,
     search: RefCell<SearchEngine>,
-    /// True while the page turns without its spoken page number: a continuous
-    /// reading turn (the screen reader's say-all is speaking) or a jump that
-    /// announces its own message. Guards the re-entrant selection event of the
-    /// post-turn caret reset, and tells the main window to stay silent.
-    advancing: Cell<bool>,
-    end_announced: Cell<bool>,
-    /// A single end-of-page boundary can raise several caret events as say-all
-    /// settles; the page turns at most once per 0.75 s.
-    last_turn: Cell<Option<Instant>>,
+    /// True while an [`Outcome`] is applied: the selection events it raises
+    /// are the move itself, not the user's caret, so they do not reach `pos`.
+    applying: Cell<bool>,
     /// The `WM_CHAR` of a key we already handled, so the read-only control does not beep.
     eat_char: Cell<bool>,
     /// Ctrl+A selected every page. The control only holds the current page, so
     /// this is InTome's selection, shown as a highlight; any caret move ends it.
     whole_doc: Cell<bool>,
-    /// Chars in each page, so the reading position is a share of the whole document.
-    page_chars: RefCell<Vec<usize>>,
 }
 
 impl ContentView {
@@ -233,15 +181,12 @@ impl ContentView {
         a11y::set_name(edit.0, "Document");
         let page_chars = (0..doc.page_count()).map(|i| doc.page(i).text.chars().count()).collect();
         let view = Rc::new(Self {
-            page_chars: RefCell::new(page_chars),
+            pos: RefCell::new(ReadingPosition::new(page_chars)),
             edit,
             filename,
             doc: RefCell::new(doc),
-            page: Cell::new(0),
             search: RefCell::default(),
-            advancing: Cell::new(false),
-            end_announced: Cell::new(false),
-            last_turn: Cell::new(None),
+            applying: Cell::new(false),
             eat_char: Cell::new(false),
             whole_doc: Cell::new(false),
         });
@@ -275,7 +220,7 @@ impl ContentView {
     }
 
     pub fn current_page(&self) -> usize {
-        self.page.get()
+        self.pos.borrow().page()
     }
 
     pub fn page_text(&self, index: usize) -> String {
@@ -284,11 +229,7 @@ impl ContentView {
     }
 
     fn current_text(&self) -> String {
-        self.page_text(self.page.get())
-    }
-
-    pub fn is_advancing(&self) -> bool {
-        self.advancing.get()
+        self.page_text(self.current_page())
     }
 
     pub fn document_hash(&self) -> String {
@@ -297,81 +238,57 @@ impl ContentView {
 
     // Page display
 
-    /// Shows the current page without a "Page N of M" announcement, for a
-    /// caller that speaks its own message (opening a document).
-    pub fn show_current_page_quietly(&self) {
-        self.advancing.set(true);
-        self.show_current_page();
-        self.advancing.set(false);
+    /// Applies a move to the control: shows its page, says the page number,
+    /// places the caret, takes focus and speaks its message, in that order.
+    fn apply(&self, o: Outcome) {
+        self.applying.set(true);
+        if o.show.is_some() {
+            // New text drops the highlight, and the caret moves to the page start.
+            self.whole_doc.set(false);
+            self.edit.set_text(&shown_text(&self.current_text()));
+            self.edit.set_selection(0, 0);
+            events::emit(AppEvent::PageChanged { page_num: self.current_page() + 1, page_count: self.page_count() });
+        }
+        if let Some(n) = o.page_number {
+            events::announce(n);
+        }
+        match o.caret {
+            Caret::Stay => {}
+            Caret::Select(s, e) => self.select(s, e),
+            Caret::Mark(s, e) => self.mark(s, e),
+            Caret::LastLineStart => {
+                let last = offset_len(&self.current_text()).saturating_sub(1);
+                let start = self.edit.line_start(self.edit.line_from_offset(last));
+                self.edit.set_selection(start, start);
+            }
+        }
+        self.applying.set(false);
+        if o.focus {
+            self.focus();
+        }
+        match o.speech {
+            Some(Speech::Interrupt(m)) => events::announce(m),
+            Some(Speech::Queued(m)) => events::announce_queued(m),
+            None => {}
+        }
     }
 
     /// Shows `page` with the caret at `caret` (chars), both clamped to the document,
-    /// without a page announcement or a continuous-reading turn: reopening a document.
+    /// without a page announcement or a continuous-reading turn: opening a document.
     pub fn restore_position(&self, page: usize, caret: usize) {
-        self.page.set(page.min(self.page_count().saturating_sub(1)));
-        self.advancing.set(true);
-        self.show_current_page();
-        self.select(caret, caret);
-        self.advancing.set(false);
+        let o = self.pos.borrow_mut().restore(page, caret);
+        self.apply(o);
     }
 
+    /// Shows the current page again, for new page text.
     pub fn show_current_page(&self) {
-        self.end_announced.set(false);
-        // New text drops the highlight, and the caret moves to the page start.
-        self.whole_doc.set(false);
-        self.edit.set_text(&shown_text(&self.current_text()));
-        self.edit.set_selection(0, 0);
-        events::emit(AppEvent::PageChanged { page_num: self.page.get() + 1, page_count: self.page_count() });
+        let o = self.pos.borrow_mut().refresh();
+        self.apply(o);
     }
 
-    pub fn go_to_page(&self, index: usize) -> bool {
-        if index >= self.page_count() {
-            return false;
-        }
-        self.page.set(index);
-        self.show_current_page();
-        true
-    }
-
-    /// [`Self::go_to_page`] without the spoken page number, for a turn whose
-    /// caller announces its own message: two interrupting announcements in a
-    /// row cut the first off after a syllable.
-    fn go_to_page_quietly(&self, index: usize) -> bool {
-        self.advancing.set(true);
-        let turned = self.go_to_page(index);
-        self.advancing.set(false);
-        turned
-    }
-
-    pub fn next_page(&self) -> bool {
-        self.go_to_page(self.page.get() + 1)
-    }
-
-    pub fn prev_page(&self) -> bool {
-        self.page.get() > 0 && self.go_to_page(self.page.get() - 1)
-    }
-
-    pub fn go_to_end(&self) {
-        let count = self.page_count();
-        if count > 0 {
-            self.go_to_page(count - 1);
-        }
-    }
-
-    /// Turns to the previous page with the caret at the start of its last
-    /// line, not its very end: a caret on the trailing line break cannot move
-    /// down, so Down would raise no selection change and continuous reading
-    /// would never advance. False on the first page.
-    pub fn go_to_prev_page_end(&self) -> bool {
-        if !self.prev_page() {
-            return false;
-        }
-        let last = offset_len(&self.current_text()).saturating_sub(1);
-        let start = self.edit.line_start(self.edit.line_from_offset(last));
-        self.advancing.set(true);
-        self.edit.set_selection(start, start);
-        self.advancing.set(false);
-        true
+    pub fn go_to_page(&self, index: usize) {
+        let o = self.pos.borrow_mut().go_to_page(index);
+        self.apply(o);
     }
 
     pub fn focus(&self) {
@@ -411,19 +328,16 @@ impl ContentView {
 
     /// How far through the document the caret is, as a percent of all its characters.
     pub fn reading_percent(&self) -> usize {
-        percent_at(&self.page_chars.borrow(), self.page.get(), self.caret())
+        let caret = self.caret();
+        self.pos.borrow().percent(caret)
     }
 
     /// Moves the caret `percent` of the way through the document, to the start
     /// of the line there, turning the page (and announcing it) when needed.
+    /// The reading percent stays `percent` until the caret moves.
     pub fn go_to_percent(&self, percent: usize) {
-        let (page, ch) = place_at(&self.page_chars.borrow(), percent);
-        if page != self.page.get() && !self.go_to_page(page) {
-            return;
-        }
-        let text = self.current_text();
-        let line_start = text.chars().take(ch).collect::<Vec<_>>().iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
-        self.select(line_start, line_start);
+        let o = self.pos.borrow_mut().go_to_percent(percent, |i| self.page_text(i));
+        self.apply(o);
     }
 
     /// Whether Ctrl+A selected the whole document and the caret has not moved since.
@@ -475,7 +389,6 @@ impl ContentView {
     // top, so a screen reader's say-all flows across pages.
 
     pub fn stop_continuous_reading(&self) {
-        self.end_announced.set(false);
         if config::get().general.continuous_reading {
             events::emit(AppEvent::ContinuousReadingStopped);
         }
@@ -488,31 +401,20 @@ impl ContentView {
         }
         let line = self.edit.line_from_offset(cp_min);
         events::emit(AppEvent::CaretMoved { line, col: cp_min.saturating_sub(self.edit.line_start(line)) });
-        self.maybe_advance(cp_min, cp_max);
-    }
-
-    fn maybe_advance(&self, cp_min: usize, cp_max: usize) {
+        if self.applying.get() {
+            return;
+        }
         // A selected range is not a resting caret, so selecting to the end (or
         // Select All) never turns the page.
-        if !config::get().general.continuous_reading || self.advancing.get() || cp_min != cp_max {
-            return;
-        }
-        if cp_max < offset_len(&shown_text(&self.current_text())) {
-            return;
-        }
-        if self.last_turn.get().is_some_and(|t| t.elapsed() <= Duration::from_millis(750)) {
-            return;
-        }
-        self.last_turn.set(Some(Instant::now()));
-        self.advancing.set(true);
-        let advanced = self.next_page();
-        self.advancing.set(false);
-        // No focus() here: a focus event interrupts the screen reader's say-all.
-        if !advanced && !self.end_announced.get() {
-            self.end_announced.set(true);
-            // Queued so it follows the last words instead of cutting them off.
-            events::announce_queued("End of document");
-            events::emit(AppEvent::ContinuousReadingStopped);
+        let at_end = cp_min == cp_max && cp_max >= offset_len(&shown_text(&self.current_text()));
+        let turn = self.pos.borrow_mut().caret_moved(at_end, Instant::now(), config::get().general.continuous_reading);
+        // The outcome never takes focus: a focus event interrupts the screen reader's say-all.
+        if let Some(o) = turn {
+            let end = o.show.is_none();
+            self.apply(o);
+            if end {
+                events::emit(AppEvent::ContinuousReadingStopped);
+            }
         }
     }
 
@@ -539,99 +441,54 @@ impl ContentView {
     }
 
     pub fn run(&self, action: KeyAction) {
-        match action {
-            KeyAction::NextPage => {
-                if !self.next_page() {
-                    events::announce("Last page");
-                }
+        let page = self.current_page();
+        let o = match action {
+            KeyAction::SelectAll => return self.select_all_document(),
+            KeyAction::Copy => return self.copy(),
+            KeyAction::Element { types, reverse } => return self.navigate_element(&types, reverse),
+            KeyAction::NextPage => self.pos.borrow_mut().next_page(),
+            KeyAction::PrevPage => self.pos.borrow_mut().prev_page(),
+            KeyAction::FirstPage => self.pos.borrow_mut().go_to_page(0),
+            KeyAction::LastPage => self.pos.borrow_mut().last_page(),
+            KeyAction::PrevPageEnd => self.pos.borrow_mut().prev_page_end(),
+            KeyAction::NextSection => {
+                let toc = self.with_doc(|d| get_toc_entries_flat(d));
+                self.pos.borrow_mut().next_section(&toc)
             }
-            KeyAction::PrevPage => {
-                if !self.prev_page() {
-                    events::announce("First page");
-                }
+            KeyAction::PrevSection => {
+                let toc = self.with_doc(|d| get_toc_entries_flat(d));
+                self.pos.borrow_mut().prev_section(&toc)
             }
-            KeyAction::SelectAll => self.select_all_document(),
-            KeyAction::Copy => self.copy(),
-            KeyAction::FirstPage => {
-                self.go_to_page(0);
+            KeyAction::SectionStart => {
+                let bounds = self.with_doc(|d| find_section_bounds(d, page));
+                self.pos.borrow_mut().section_start(bounds)
             }
-            KeyAction::LastPage => self.go_to_end(),
-            KeyAction::PrevPageEnd => {
-                self.go_to_prev_page_end();
+            KeyAction::SectionEnd => {
+                let bounds = self.with_doc(|d| find_section_bounds(d, page));
+                self.pos.borrow_mut().section_end(bounds)
             }
-            KeyAction::Element { types, reverse } => self.navigate_element(&types, reverse),
-            KeyAction::NextSection => self.next_section(),
-            KeyAction::PrevSection => self.prev_section(),
-            KeyAction::SectionStart => match self.with_doc(|d| find_section_bounds(d, self.page.get())) {
-                Some((start, _)) => {
-                    self.go_to_page_quietly(start);
-                    events::announce(format!("Start of section, page {}", start + 1));
-                }
-                None => {
-                    self.go_to_page(0);
-                }
-            },
-            KeyAction::SectionEnd => match self.with_doc(|d| find_section_bounds(d, self.page.get())) {
-                Some((_, end)) => {
-                    self.go_to_page_quietly(end);
-                    events::announce(format!("End of section, page {}", end + 1));
-                }
-                None => self.go_to_end(),
-            },
-        }
+        };
+        self.apply(o);
     }
 
     // Structured navigation
 
     fn navigate_element(&self, types: &[ElementType], reverse: bool) {
-        let (from, page) = (self.caret(), self.page.get());
+        let (from, page) = (self.caret(), self.current_page());
         let found = self.with_doc(|d| {
             if reverse { element_nav::find_prev(d, types, from, page) } else { element_nav::find_next(d, types, from, page) }
         });
-        match found {
-            Some(r) => self.go_to_element(r.page_index, &r.element),
-            None => events::announce(format!("No more {}", plural(types))),
-        }
+        let highlight = config::get().navigation.highlight_on_navigate;
+        let o = self.pos.borrow_mut().element(found.as_ref().map(|r| (r.page_index, &r.element)), types, highlight);
+        self.apply(o);
     }
 
     /// Shows `element` on page `page_index`, selected when
     /// `navigation.highlight_on_navigate` is on, and announces it.
     pub fn go_to_element(&self, page_index: usize, element: &SemanticElement) {
-        if page_index != self.page.get() {
-            self.go_to_page_quietly(page_index);
-        }
-        let end = if config::get().navigation.highlight_on_navigate { element.end_pos } else { element.start_pos };
-        self.mark(element.start_pos, end);
-        self.focus();
-        events::announce(element_announcement(element));
-    }
-
-    fn next_section(&self) {
-        let toc = self.with_doc(|d| get_toc_entries_flat(d));
-        if toc.is_empty() {
-            return events::announce("No table of contents");
-        }
-        match toc.iter().find(|e| e.page_index > self.page.get()) {
-            Some(e) => {
-                self.go_to_page_quietly(e.page_index);
-                events::announce(format!("Section: {}", e.title));
-            }
-            None => events::announce("Last section"),
-        }
-    }
-
-    fn prev_section(&self) {
-        let toc = self.with_doc(|d| get_toc_entries_flat(d));
-        if toc.is_empty() {
-            return events::announce("No table of contents");
-        }
-        match toc.iter().rev().find(|e| e.page_index < self.page.get()) {
-            Some(e) => {
-                self.go_to_page_quietly(e.page_index);
-                events::announce(format!("Section: {}", e.title));
-            }
-            None => events::announce("First section"),
-        }
+        let highlight = config::get().navigation.highlight_on_navigate;
+        let o = self.pos.borrow_mut().element(Some((page_index, element)), &[], highlight);
+        self.apply(o);
     }
 
     /// Title of the TOC entry that starts on `index`, if any.
@@ -647,29 +504,16 @@ impl ContentView {
         self.with_doc(|d| search.search(query, d, case_sensitive, wrap))
     }
 
-    pub fn next_match(&self) -> bool {
-        let found = self.search.borrow_mut().next_match(self.page.get(), self.caret());
-        self.go_to_match(found)
+    pub fn next_match(&self) {
+        let found = self.search.borrow_mut().next_match(self.current_page(), self.caret());
+        let o = self.pos.borrow_mut().search_match(found.as_ref(), self.match_info());
+        self.apply(o);
     }
 
-    pub fn prev_match(&self) -> bool {
-        let found = self.search.borrow_mut().prev_match(self.page.get(), self.caret());
-        self.go_to_match(found)
-    }
-
-    fn go_to_match(&self, found: Option<SearchMatch>) -> bool {
-        let Some(m) = found else {
-            events::announce("No more matches");
-            return false;
-        };
-        if m.page_index != self.page.get() {
-            self.go_to_page_quietly(m.page_index);
-        }
-        self.select(m.start_pos, m.end_pos);
-        self.focus();
-        let (idx, total) = self.match_info();
-        events::announce(format!("Match {idx} of {total}: {}", m.context));
-        true
+    pub fn prev_match(&self) {
+        let found = self.search.borrow_mut().prev_match(self.current_page(), self.caret());
+        let o = self.pos.borrow_mut().search_match(found.as_ref(), self.match_info());
+        self.apply(o);
     }
 
     /// `(current match, 1-based; total)` for the find bar.
@@ -686,13 +530,10 @@ impl ContentView {
             return;
         };
         doc.set_ocr_result(index, result.text, result.elements);
-        if let Some(n) = self.page_chars.borrow_mut().get_mut(index) {
-            *n = doc.page(index).text.chars().count();
-        }
+        let chars = doc.page(index).text.chars().count();
         drop(doc);
-        if self.page.get() == index {
-            self.show_current_page();
-        }
+        let o = self.pos.borrow_mut().page_text_changed(index, chars);
+        self.apply(o);
     }
 
     /// Releases the document's continuous-reading state and destroys the control.
@@ -732,9 +573,7 @@ impl ReadingTarget for ViewTarget {
         self.with(|v| v.mark(start, end))
     }
     fn go_to_page(&self, index: usize) {
-        self.with(|v| {
-            v.go_to_page(index);
-        })
+        self.with(|v| v.go_to_page(index))
     }
     fn section_title(&self, index: usize) -> Option<String> {
         self.with(|v| v.section_title(index))
@@ -783,32 +622,6 @@ mod tests {
     }
 
     #[test]
-    fn reading_percent_counts_characters_across_pages() {
-        let pages = [100, 300, 600]; // 1000 chars
-        assert_eq!(percent_at(&pages, 0, 0), 0);
-        assert_eq!(percent_at(&pages, 0, 50), 5, "moves within a page");
-        assert_eq!(percent_at(&pages, 1, 0), 10);
-        assert_eq!(percent_at(&pages, 2, 300), 70);
-        assert_eq!(percent_at(&pages, 2, 600), 100, "the very end");
-        assert_eq!(percent_at(&pages, 2, 9999), 100, "a caret past the page clamps");
-        assert_eq!(percent_at(&[], 0, 0), 0);
-        // A one-page document still moves as you read.
-        assert_eq!(percent_at(&[2300], 0, 1150), 50);
-    }
-
-    #[test]
-    fn slider_percent_finds_its_page_and_char() {
-        let pages = [100, 300, 600];
-        assert_eq!(place_at(&pages, 0), (0, 0));
-        assert_eq!(place_at(&pages, 5), (0, 50));
-        assert_eq!(place_at(&pages, 10), (1, 0));
-        assert_eq!(place_at(&pages, 70), (2, 300));
-        assert_eq!(place_at(&pages, 100), (2, 600));
-        assert_eq!(place_at(&pages, 250), (2, 600), "clamped to 100");
-        assert_eq!(place_at(&[0, 0], 50), (1, 0), "an empty document lands on its last page");
-    }
-
-    #[test]
     fn copy_message_counts_pages_waiting_for_ocr() {
         assert_eq!(copied_message(1, 0), "Copied entire document, 1 page");
         assert_eq!(copied_message(12, 1), "Copied entire document, 12 pages. 1 page has no text yet and needs OCR.");
@@ -820,12 +633,5 @@ mod tests {
         assert_eq!(shown_text("Part One. "), "Part One. \n");
         assert_eq!(shown_text("quiet old.\n\n"), "quiet old.\n\n");
         assert_eq!(shown_text(""), "\n");
-    }
-
-    #[test]
-    fn no_more_announcements_use_prism_plurals() {
-        assert_eq!(plural(&HEADING_TYPES), "headings");
-        assert_eq!(plural(&[ElementType::Quote]), "blockquotes");
-        assert_eq!(plural(&[ElementType::Heading2]), "elements");
     }
 }

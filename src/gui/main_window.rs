@@ -398,8 +398,6 @@ struct Ui {
     views: RefCell<Vec<Rc<ContentView>>>,
     active: Cell<Option<usize>>,
     sidebar: Cell<bool>,
-    /// True while moving the slider moves the caret, so the caret does not move the slider back.
-    slider_driving: Cell<bool>,
     sidebar_width: Cell<i32>,
     dragging: Cell<bool>,
     reader: ReadingController,
@@ -449,7 +447,6 @@ impl MainWindow {
             views: RefCell::default(),
             active: Cell::new(None),
             sidebar: Cell::new(true),
-            slider_driving: Cell::new(false),
             sidebar_width: Cell::new(if cfg.sidebar_width > 0 { cfg.sidebar_width } else { crate::constants::SIDEBAR_DEFAULT_WIDTH }),
             dragging: Cell::new(false),
             reader: ReadingController::new(),
@@ -575,10 +572,8 @@ impl MainWindow {
             if let Some(v) = m.active_view() {
                 let percent = m.0.progress.value();
                 // The caret lands at a line start, a little short of the exact percent;
-                // the slider stays where the user put it.
-                m.0.slider_driving.set(true);
+                // the view keeps reporting `percent`, so the slider stays where the user put it.
                 v.go_to_percent(percent);
-                m.0.slider_driving.set(false);
                 m.0.progress.show_label(percent);
             }
             Ok(())
@@ -898,12 +893,8 @@ impl MainWindow {
         self.sync_progress();
     }
 
-    /// Puts the active document's reading position on the progress slider,
-    /// unless moving the slider is what moved it.
+    /// Puts the active document's reading position on the progress slider.
     fn sync_progress(&self) {
-        if self.0.slider_driving.get() {
-            return;
-        }
         match self.active_view() {
             Some(v) => self.0.progress.show(v.reading_percent()),
             None => self.0.progress.reset(),
@@ -913,11 +904,6 @@ impl MainWindow {
     fn on_page_changed(&self, page_num: usize, page_count: usize) {
         self.show_page_state(page_num, page_count);
         self.0.toc.select_page(page_num.saturating_sub(1));
-        // A continuous-reading turn stays silent: an interrupting announcement
-        // would stop the screen reader's say-all at every page boundary.
-        if !self.active_view().is_some_and(|v| v.is_advancing()) {
-            announce(format!("Page {page_num} of {page_count}"));
-        }
     }
 
     // Keyboard
@@ -1331,7 +1317,7 @@ impl MainWindow {
         };
         match saved {
             Some((page, caret)) => view.restore_position(page, caret),
-            None => view.show_current_page_quietly(),
+            None => view.restore_position(0, 0),
         }
         let page_count = view.page_count();
 
