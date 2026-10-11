@@ -14,7 +14,7 @@ param(
     [Parameter(Mandatory)][string]$Steps,
     [ValidateSet('on', 'off')][string]$Continuous = 'off',
     [string]$Exe = (Join-Path $PSScriptRoot '..\target\release\intome.exe'),
-    [string]$PrismRoot = 'C:\Users\khais\Documents\GitHub\Prism-Document-Reader',
+    [string]$PrismRoot = '',  # found by nvda_locate.ps1 when empty
     [int]$KeyDelayMs = 120,
     [int]$StepMs = 1500,
     [int]$LoadMs = 5000
@@ -47,6 +47,11 @@ public static class ScenarioWin {
   public static void Focus(IntPtr h) { if (GetForegroundWindow() == h) return; keybd_event(0x87, 0, 0, IntPtr.Zero); keybd_event(0x87, 0, 2, IntPtr.Zero); SetForegroundWindow(h); }
 }
 '@
+. (Join-Path $PSScriptRoot 'nvda_locate.ps1')
+if ($App -eq 'prism' -and -not $PrismRoot) {
+    $PrismRoot = Find-PrismRoot
+    if (-not $PrismRoot) { throw "Prism's source was not found next to this repo; set PRISM_ROOT or pass -PrismRoot." }
+}
 $capture = Join-Path $PSScriptRoot 'nvda_speech_capture.ps1'
 $press = Join-Path $PSScriptRoot 'press_keys.ps1'
 $doc = (Resolve-Path $Doc).Path
