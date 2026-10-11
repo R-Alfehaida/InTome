@@ -398,6 +398,8 @@ struct Ui {
     views: RefCell<Vec<Rc<ContentView>>>,
     active: Cell<Option<usize>>,
     sidebar: Cell<bool>,
+    /// True while moving the slider moves the caret, so the caret does not move the slider back.
+    slider_driving: Cell<bool>,
     sidebar_width: Cell<i32>,
     dragging: Cell<bool>,
     reader: ReadingController,
@@ -447,6 +449,7 @@ impl MainWindow {
             views: RefCell::default(),
             active: Cell::new(None),
             sidebar: Cell::new(true),
+            slider_driving: Cell::new(false),
             sidebar_width: Cell::new(if cfg.sidebar_width > 0 { cfg.sidebar_width } else { crate::constants::SIDEBAR_DEFAULT_WIDTH }),
             dragging: Cell::new(false),
             reader: ReadingController::new(),
@@ -564,13 +567,19 @@ impl MainWindow {
             Ok(())
         });
         let m = self.clone();
-        ui.progress.slider.on().wm_h_scroll(move |_| {
-            // Every move is followed by a TB_ENDTRACK at the same position; turning again would announce twice.
-            let page = m.0.progress.requested_page();
-            if let Some(v) = m.active_view()
-                && page != v.current_page()
-            {
-                v.go_to_page(page);
+        ui.progress.slider.on().wm_h_scroll(move |p| {
+            // Every move is followed by a TB_ENDTRACK at the same position; acting on it would jump twice.
+            if p.request == co::SB_REQ::ENDSCROLL {
+                return Ok(());
+            }
+            if let Some(v) = m.active_view() {
+                let percent = m.0.progress.value();
+                // The caret lands at a line start, a little short of the exact percent;
+                // the slider stays where the user put it.
+                m.0.slider_driving.set(true);
+                v.go_to_percent(percent);
+                m.0.slider_driving.set(false);
+                m.0.progress.show_label(percent);
             }
             Ok(())
         });
@@ -699,6 +708,7 @@ impl MainWindow {
         let m = self.clone();
         events::subscribe(move |e| match e {
             AppEvent::PageChanged { page_num, page_count } => m.on_page_changed(*page_num, *page_count),
+            AppEvent::CaretMoved { .. } => m.sync_progress(),
             AppEvent::OcrStarted { .. } => m.set_ocr_running(true, "OCR in progress..."),
             AppEvent::OcrCompleted { .. } => m.set_ocr_running(false, "Ready"),
             // Page 0 means the job never started (no provider); no OcrCompleted follows.
@@ -885,7 +895,19 @@ impl MainWindow {
 
     fn show_page_state(&self, page_num: usize, page_count: usize) {
         self.set_status(1, &format!("Page {page_num} of {page_count}"));
-        self.0.progress.update(page_num, page_count);
+        self.sync_progress();
+    }
+
+    /// Puts the active document's reading position on the progress slider,
+    /// unless moving the slider is what moved it.
+    fn sync_progress(&self) {
+        if self.0.slider_driving.get() {
+            return;
+        }
+        match self.active_view() {
+            Some(v) => self.0.progress.show(v.reading_percent()),
+            None => self.0.progress.reset(),
+        }
     }
 
     fn on_page_changed(&self, page_num: usize, page_count: usize) {

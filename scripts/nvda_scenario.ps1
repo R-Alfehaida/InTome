@@ -27,11 +27,15 @@ public static class ScenarioWin {
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
-  public static string FindTitle(string part) {
-    string found = null;
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  // The visible window titled "*<part>" owned by one of `pids`. Matching by title alone
+  // can pick another app whose title also ends in the app's name.
+  public static IntPtr FindOwned(uint[] pids, string part) {
+    IntPtr found = IntPtr.Zero;
     EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
       var t = new StringBuilder(512); GetWindowTextW(h, t, 512);
-      if (IsWindowVisible(h) && t.ToString().EndsWith(part)) { found = t.ToString(); return false; }
+      if (IsWindowVisible(h) && Array.IndexOf(pids, pid) >= 0 && t.ToString().EndsWith(part)) { found = h; return false; }
       return true;
     }, IntPtr.Zero);
     return found;
@@ -48,6 +52,8 @@ public static class ScenarioWin {
 }
 '@
 . (Join-Path $PSScriptRoot 'nvda_locate.ps1')
+# Before APPDATA moves to the scratch folder below: Python's per-user packages live under it.
+$env:NVDA_CLIENT_DLL = Find-NvdaClientDll
 if ($App -eq 'prism' -and -not $PrismRoot) {
     $PrismRoot = Find-PrismRoot
     if (-not $PrismRoot) { throw "Prism's source was not found next to this repo; set PRISM_ROOT or pass -PrismRoot." }
@@ -64,7 +70,8 @@ $appdata = Join-Path $env:TEMP "nvda-scenario\$App"
 Remove-Item -Recurse -Force $appdata -ErrorAction SilentlyContinue
 if ($App -eq 'intome') {
     New-Item -ItemType Directory -Force (Join-Path $appdata 'InTome') | Out-Null
-    Set-Content -Encoding ascii (Join-Path $appdata 'InTome\intome.toml') "[general]`ncontinuous_reading = $on`n"
+    # A last_run_version newer than any build reads as a downgrade, so What's New stays closed.
+    Set-Content -Encoding ascii (Join-Path $appdata 'InTome\intome.toml') "[general]`ncontinuous_reading = $on`nlast_run_version = `"999.0.0`"`n"
 } else {
     New-Item -ItemType Directory -Force (Join-Path $appdata 'Prism') | Out-Null
     Set-Content -Encoding ascii (Join-Path $appdata 'Prism\prism.ini') "[general]`ncontinuous_reading = $on`n"
@@ -83,13 +90,17 @@ try {
     $env:APPDATA = $savedAppdata
 }
 
-$title = $null
+$hwnd = [IntPtr]::Zero
 $deadline = (Get-Date).AddSeconds(30)
-while (-not $title -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250; $title = [ScenarioWin]::FindTitle($suffix) }
-if (-not $title) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Write-Output "FAIL: no window titled *$suffix*"; exit 2 }
+while ($hwnd -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 250
+    # Prism runs under a Python launcher, so its window can belong to a child process.
+    $pids = [uint32[]](@($proc.Id) + @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($proc.Id)" | ForEach-Object { $_.ProcessId }))
+    $hwnd = [ScenarioWin]::FindOwned($pids, $suffix)
+}
+if ($hwnd -eq [IntPtr]::Zero) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Write-Output "FAIL: no window titled *$suffix* from the started process"; exit 2 }
 # NVDA mouse tracking speaks whatever changes under the cursor; park it in the screen corner.
 [void][ScenarioWin]::SetProcessDPIAware()
-$hwnd = [ScenarioWin]::FindWindowW($null, $title)
 [ScenarioWin]::Focus($hwnd)
 [void][ScenarioWin]::SetCursorPos(10000, 10000)
 Start-Sleep -Milliseconds $LoadMs
@@ -98,12 +109,14 @@ Start-Sleep -Milliseconds $LoadMs
 foreach ($step in $Steps.Split(';')) {
     $keys, $wait = $step.Trim().Split('@')
     $wait = if ($wait) { [int]$wait } else { $StepMs }
-    # Closing or opening a document retitles the window; follow the process, or
-    # press_keys finds no window and later steps silently press nothing.
-    $proc.Refresh()
-    if ($proc.MainWindowTitle) { $title = $proc.MainWindowTitle }
     & $capture -Mark -Text "step: $keys"
-    & $press -WindowTitle $title -Keys $keys -DelayMs $KeyDelayMs | Out-Null
+    # By handle: closing or opening a document retitles the window.
+    $pressed = & $press -Hwnd $hwnd.ToInt64() -Keys $keys -DelayMs $KeyDelayMs
+    if ($pressed -match '^FAIL') {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        Write-Output "FAIL at step '$keys': $pressed"
+        exit 3
+    }
     Start-Sleep -Milliseconds $wait
 }
 

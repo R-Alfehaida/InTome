@@ -65,6 +65,10 @@ Press **F6** or **Shift+F6** to cycle between three focus areas:
 
 Toggle the sidebar on or off with **F9**.
 
+### Reading Progress
+
+The progress slider shows how far through the whole document your cursor is, as a percentage of its text, and the number next to it says the same. It moves as you read, not only when the page turns. On the slider, the Left and Right arrow keys move 1 % back or forward, Home goes to the start of the document and End to the end, and the cursor follows to the start of the line at that point.
+
 ## Structured Navigation
 
 When focused in the content area, use these single-key shortcuts to jump between semantic elements:

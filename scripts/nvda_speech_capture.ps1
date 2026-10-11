@@ -27,6 +27,8 @@ Add-Type -AssemblyName System.Windows.Forms
 # accessible_output2's copy (see nvda_locate.ps1 for where it looks).
 . (Join-Path $PSScriptRoot 'nvda_locate.ps1')
 $dll = Find-NvdaClientDll
+# Later calls in this session must load the same DLL: Add-Type rejects a changed NvdaCap.
+$env:NVDA_CLIENT_DLL = $dll
 Add-Type -TypeDefinition @"
 using System; using System.Runtime.InteropServices;
 public static class NvdaCap {

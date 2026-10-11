@@ -2,6 +2,12 @@
 
 The newest version comes first. Each version lists the features and fixes you'll notice; small internal changes are left out. Press H to move from one version to the next.
 
+## Unreleased
+
+### Fixed
+
+- **The progress slider follows your reading.** It now shows how far through the whole document your cursor is, by its text, and moves as you read within a page. Before, it only moved on page turns, so it seemed stuck in long pages and could only say 0 or 100 in short documents, and your screen reader and the number beside the slider gave different percentages. Moving the slider now takes you to that point in the document.
+
 ## 0.0.3 (October 11, 2026)
 
 ### New

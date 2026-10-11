@@ -136,6 +136,32 @@ fn shown_text(text: &str) -> std::borrow::Cow<'_, str> {
     if text.ends_with(['\n', '\r']) { text.into() } else { format!("{text}\n").into() }
 }
 
+/// Percent (0-100) of the document before char `caret` of page `page`, where
+/// `page_chars` holds each page's length. Floor, so the last char reads 100
+/// only at the very end.
+pub fn percent_at(page_chars: &[usize], page: usize, caret: usize) -> usize {
+    let total: usize = page_chars.iter().sum();
+    if total == 0 {
+        return 0;
+    }
+    let before: usize = page_chars.iter().take(page).sum::<usize>() + caret.min(page_chars.get(page).copied().unwrap_or(0));
+    before * 100 / total
+}
+
+/// The page and char `percent` of the way through the document. 100 is the end
+/// of the last page.
+pub fn place_at(page_chars: &[usize], percent: usize) -> (usize, usize) {
+    let total: usize = page_chars.iter().sum();
+    let mut target = total * percent.min(100) / 100;
+    for (i, &len) in page_chars.iter().enumerate() {
+        if target < len || i + 1 == page_chars.len() {
+            return (i, target.min(len));
+        }
+        target -= len;
+    }
+    (0, 0)
+}
+
 /// "1 page", "42 pages".
 fn pages(n: usize) -> String {
     if n == 1 { "1 page".into() } else { format!("{n} pages") }
@@ -195,15 +221,19 @@ pub struct ContentView {
     /// Ctrl+A selected every page. The control only holds the current page, so
     /// this is InTome's selection, shown as a highlight; any caret move ends it.
     whole_doc: Cell<bool>,
+    /// Chars in each page, so the reading position is a share of the whole document.
+    page_chars: RefCell<Vec<usize>>,
 }
 
 impl ContentView {
     /// Creates the reading control on `parent` for `doc`. Call
     /// [`Self::show_current_page`] once the caller is ready for `PageChanged`.
-    pub fn new(parent: isize, doc: Box<dyn Document>, filename: String) -> anyhow::Result<Rc<Self>> {
+    pub fn new(parent: isize, mut doc: Box<dyn Document>, filename: String) -> anyhow::Result<Rc<Self>> {
         let edit = RichEdit::create(parent, CONTROL_ID)?;
         a11y::set_name(edit.0, "Document");
+        let page_chars = (0..doc.page_count()).map(|i| doc.page(i).text.chars().count()).collect();
         let view = Rc::new(Self {
+            page_chars: RefCell::new(page_chars),
             edit,
             filename,
             doc: RefCell::new(doc),
@@ -377,6 +407,23 @@ impl ContentView {
         let (s, e) = (char_to_offset(&text, start), char_to_offset(&text, end));
         self.edit.set_selection(s, s);
         self.edit.set_highlight(s, e);
+    }
+
+    /// How far through the document the caret is, as a percent of all its characters.
+    pub fn reading_percent(&self) -> usize {
+        percent_at(&self.page_chars.borrow(), self.page.get(), self.caret())
+    }
+
+    /// Moves the caret `percent` of the way through the document, to the start
+    /// of the line there, turning the page (and announcing it) when needed.
+    pub fn go_to_percent(&self, percent: usize) {
+        let (page, ch) = place_at(&self.page_chars.borrow(), percent);
+        if page != self.page.get() && !self.go_to_page(page) {
+            return;
+        }
+        let text = self.current_text();
+        let line_start = text.chars().take(ch).collect::<Vec<_>>().iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+        self.select(line_start, line_start);
     }
 
     /// Whether Ctrl+A selected the whole document and the caret has not moved since.
@@ -639,6 +686,9 @@ impl ContentView {
             return;
         };
         doc.set_ocr_result(index, result.text, result.elements);
+        if let Some(n) = self.page_chars.borrow_mut().get_mut(index) {
+            *n = doc.page(index).text.chars().count();
+        }
         drop(doc);
         if self.page.get() == index {
             self.show_current_page();
@@ -730,6 +780,32 @@ mod tests {
         let pdf = ["Page one", "", "Page three\n", "Page four"].map(String::from);
         assert_eq!(join_pages(&pdf), "Page one\n\nPage three\nPage four");
         assert_eq!(join_pages(&[]), "");
+    }
+
+    #[test]
+    fn reading_percent_counts_characters_across_pages() {
+        let pages = [100, 300, 600]; // 1000 chars
+        assert_eq!(percent_at(&pages, 0, 0), 0);
+        assert_eq!(percent_at(&pages, 0, 50), 5, "moves within a page");
+        assert_eq!(percent_at(&pages, 1, 0), 10);
+        assert_eq!(percent_at(&pages, 2, 300), 70);
+        assert_eq!(percent_at(&pages, 2, 600), 100, "the very end");
+        assert_eq!(percent_at(&pages, 2, 9999), 100, "a caret past the page clamps");
+        assert_eq!(percent_at(&[], 0, 0), 0);
+        // A one-page document still moves as you read.
+        assert_eq!(percent_at(&[2300], 0, 1150), 50);
+    }
+
+    #[test]
+    fn slider_percent_finds_its_page_and_char() {
+        let pages = [100, 300, 600];
+        assert_eq!(place_at(&pages, 0), (0, 0));
+        assert_eq!(place_at(&pages, 5), (0, 50));
+        assert_eq!(place_at(&pages, 10), (1, 0));
+        assert_eq!(place_at(&pages, 70), (2, 300));
+        assert_eq!(place_at(&pages, 100), (2, 600));
+        assert_eq!(place_at(&pages, 250), (2, 600), "clamped to 100");
+        assert_eq!(place_at(&[0, 0], 50), (1, 0), "an empty document lands on its last page");
     }
 
     #[test]

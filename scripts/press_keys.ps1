@@ -1,7 +1,9 @@
 # Brings a top-level window to the foreground and presses real keys through
-# SendInput (WScript SendKeys drops arrow keys in some sessions).
+# SendInput (WScript SendKeys drops arrow keys in some sessions). Name the window by
+# its exact -WindowTitle or by -Hwnd. Presses nothing unless that window is in front.
 # Keys: comma-separated chords such as "down,down,tab,shift+tab,alt+up,space,enter,esc,a".
-param([Parameter(Mandatory)][string]$WindowTitle, [Parameter(Mandatory)][string]$Keys, [int]$DelayMs = 120)
+param([string]$WindowTitle = '', [Parameter(Mandatory)][string]$Keys, [int]$DelayMs = 120, [long]$Hwnd = 0)
+if (-not $WindowTitle -and -not $Hwnd) { Write-Output "FAIL: pass -WindowTitle or -Hwnd"; exit 2 }
 Add-Type -TypeDefinition @'
 using System; using System.Runtime.InteropServices;
 public static class Press {
@@ -28,12 +30,14 @@ public static class Press {
 '@
 $vk = @{ tab=0x09; enter=0x0D; esc=0x1B; space=0x20; end=0x23; home=0x24; left=0x25; up=0x26; right=0x27; down=0x28; delete=0x2E; insert=0x2D; pageup=0x21; pagedown=0x22; f1=0x70; f2=0x71; f3=0x72; f4=0x73; f5=0x74; f6=0x75; f7=0x76; f8=0x77; f9=0x78; f10=0x79; slash=0xBF; comma=0xBC }
 $mod = @{ shift=0x10; ctrl=0x11; alt=0x12; insert=0x2D }
-$h = [Press]::Find($WindowTitle)
+$h = if ($Hwnd) { [IntPtr]$Hwnd } else { [Press]::Find($WindowTitle) }
 if ($h -eq [IntPtr]::Zero) { Write-Output "FAIL: window '$WindowTitle' not found"; exit 2 }
 if ([Press]::GetForegroundWindow() -ne $h) {
     # Alt tap lets this process take the foreground (SetForegroundWindow lock rule).
     [Press]::Chord(@(), 0x12); [void][Press]::SetForegroundWindow($h); Start-Sleep -Milliseconds 200
 }
+# Keys go to whatever is in front, so never press them anywhere but the target.
+if ([Press]::GetForegroundWindow() -ne $h) { Write-Output "FAIL: could not bring the target window to the front; no keys pressed"; exit 3 }
 foreach ($chord in $Keys.Split(',')) {
     $parts = $chord.Trim().ToLower().Split('+')
     $mods = [uint16[]]@(if ($parts.Length -gt 1) { $parts[0..($parts.Length - 2)] | ForEach-Object { $mod[$_] } })

@@ -1,6 +1,12 @@
 //! Reading-progress slider with a percentage label. Focusable: the screen
-//! reader speaks its position, and moving it turns to that page. Port of
-//! prism/gui/progress_bar.py.
+//! reader speaks its position, and moving it jumps to that point in the
+//! document. Port of prism/gui/progress_bar.py.
+//!
+//! The slider is always 0-100, the percent of the document's characters
+//! before the caret, so the label and the value a screen reader reads agree,
+//! and it moves as you read within a page. Prism ranged it over pages, which
+//! stood still within a page and, in a one- or two-page document, could only
+//! read 0 or 100.
 
 use winsafe::{self as w, co, gui, prelude::*};
 
@@ -9,11 +15,6 @@ use crate::platform::win32::a11y;
 pub struct ProgressBar {
     pub slider: gui::Trackbar,
     label: gui::Label,
-}
-
-/// Percent of the document read at 1-based `page_num`.
-pub fn percent(page_num: usize, page_count: usize) -> usize {
-    page_num * 100 / page_count.max(1)
 }
 
 impl ProgressBar {
@@ -33,23 +34,28 @@ impl ProgressBar {
         let _ = self.label.hwnd().SetWindowPos(w::HwndPlace::None, w::POINT::with(x + width - label_w, y + gui::dpi_y(4)), w::SIZE::with(label_w, gui::dpi_y(20)), co::SWP::NOZORDER);
     }
 
-    /// Shows page `page_num` (1-based) of `page_count`. Does not request a page.
-    pub fn update(&self, page_num: usize, page_count: usize) {
-        // A trackbar needs min < max.
-        self.slider.set_range(1, page_count.max(2) as u32);
-        self.slider.set_pos(page_num as u32);
-        let _ = self.label.hwnd().SetWindowText(&format!("{} %", percent(page_num, page_count)));
+    /// Shows `percent` (0-100) on the slider and the label. Does not move the reading position.
+    pub fn show(&self, percent: usize) {
+        let percent = percent.min(100);
+        // Skipped when unchanged: this runs on every caret move.
+        if self.slider.pos() != percent as u32 {
+            self.slider.set_pos(percent as u32);
+        }
+        self.show_label(percent);
+    }
+
+    /// Sets only the label, for when the slider itself already holds the value.
+    pub fn show_label(&self, percent: usize) {
+        let _ = self.label.hwnd().SetWindowText(&format!("{} %", percent.min(100)));
     }
 
     /// Empties the slider and label for when no document is open.
     pub fn reset(&self) {
-        self.slider.set_range(0, 100);
-        self.slider.set_pos(0);
-        let _ = self.label.hwnd().SetWindowText("0 %");
+        self.show(0);
     }
 
-    /// The 0-based page the user moved the slider to.
-    pub fn requested_page(&self) -> usize {
-        (self.slider.pos() as usize).saturating_sub(1)
+    /// The percent the user moved the slider to.
+    pub fn value(&self) -> usize {
+        self.slider.pos() as usize
     }
 }
