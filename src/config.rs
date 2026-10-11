@@ -36,6 +36,10 @@ pub struct General {
     pub recent_files_limit: usize,
     /// Reopen each file at the page and caret it was closed at.
     pub remember_position: bool,
+    /// Open the changelog on the first start after an update.
+    pub open_changelog_after_update: bool,
+    /// Check GitHub for a newer version at startup and offer it when there is one.
+    pub check_updates_on_startup: bool,
     /// The version that last ran, so an update opens the changelog once. A fresh
     /// install starts at the running version; a settings file from before this
     /// field existed reads as empty, which means it was saved by an older version.
@@ -212,6 +216,8 @@ impl Default for General {
             page_size: constants::DEFAULT_PAGE_SIZE,
             recent_files_limit: 10,
             remember_position: true,
+            open_changelog_after_update: true,
+            check_updates_on_startup: true,
             last_run_version: constants::APP_VERSION.into(),
         }
     }
@@ -420,6 +426,7 @@ mod tests {
         let old: Settings = toml::from_str("[general]\ncontinuous_reading = true\n").unwrap();
         assert_eq!(old.general.last_run_version, "");
         assert!(old.general.continuous_reading);
+        assert!(old.general.open_changelog_after_update && old.general.check_updates_on_startup, "an older file keeps both on");
     }
 
     #[test]

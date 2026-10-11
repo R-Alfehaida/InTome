@@ -684,16 +684,22 @@ impl MainWindow {
         if let Some(path) = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_file()) {
             self.open_file(&path);
         }
+        if config::get().general.check_updates_on_startup {
+            updater_ui::check_for_updates(self.wnd(), true);
+        }
     }
 
-    /// Opens the changelog once, on the first start after an update.
+    /// Opens the changelog once, on the first start after an update, when
+    /// `general.open_changelog_after_update` is on. The version is saved either
+    /// way, so turning the option on later doesn't open a stale changelog.
     fn show_whats_new_after_update(&self) {
-        let last = config::get().general.last_run_version;
+        let general = config::get().general;
+        let last = general.last_run_version;
         if last == APP_VERSION {
             return;
         }
         config::update("general.last_run_version", |s| s.general.last_run_version = APP_VERSION.into());
-        if updated_since(&last, APP_VERSION) {
+        if general.open_changelog_after_update && updated_since(&last, APP_VERSION) {
             log::info!("updated from {} to {APP_VERSION}; opening the changelog", if last.is_empty() { "an older version" } else { &last });
             self.on_whats_new();
         }

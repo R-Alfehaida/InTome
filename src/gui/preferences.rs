@@ -135,9 +135,13 @@ fn general(p: &Page, cfg: &Settings) -> Save {
     let limit = cfg.general.recent_files_limit as u32;
     let recent = p.spin("Recent files limit:", limit, 1, 50);
     let remember = p.check("Remember reading position", cfg.general.remember_position);
+    let changelog = p.check("Open What's New after an update", cfg.general.open_changelog_after_update);
+    let check_updates = p.check("Check for updates on startup", cfg.general.check_updates_on_startup);
     Box::new(move |s| {
         s.general.continuous_reading = continuous.is_checked();
         s.general.remember_position = remember.is_checked();
+        s.general.open_changelog_after_update = changelog.is_checked();
+        s.general.check_updates_on_startup = check_updates.is_checked();
         s.general.recent_files_limit = spin_value(&recent, 1, 50, limit) as usize;
     })
 }

@@ -251,7 +251,7 @@ Press **Ctrl+Shift+P** to open the Batch Convert dialog. Add multiple files, cho
 
 Press **Ctrl+Comma** to open the Preferences dialog. Settings are organized into pages:
 
-- **General** -- continuous reading, recent files limit, remember reading position
+- **General** -- continuous reading, recent files limit, remember reading position, open What's New after an update, check for updates on startup
 - **Display** -- font, font size, OpenDyslexic toggle, line spacing
 - **Document** -- PDF reading mode, cache settings
 - **Gemini Models** -- model selection, mode, concurrency, timeout
@@ -316,7 +316,9 @@ InTome is designed from the ground up for screen reader users:
 
 Choose **Help > Check for Updates** to see whether a newer version of InTome is available. InTome checks the project's GitHub releases over HTTPS -- no account, sign-in, or token is required. If a newer version exists, InTome asks whether you want to install it. If you agree, it downloads the new version, verifies its integrity, replaces its own files and restarts. Your settings, bookmarks, notes and reading positions are kept. If you are already running the latest version, InTome simply tells you so.
 
-The first time InTome starts after an update, it opens **What's New**, a list of the new features and fixes in each version, newest first, with a heading per version. Open it again any time with **Help > What's New**.
+InTome also checks for updates each time it starts. It does this in the background and only speaks up when a new version is available, asking whether to install it. To stop the startup check, turn off **Check for updates on startup** in **Preferences > General**.
+
+The first time InTome starts after an update, it opens **What's New**, a list of the new features and fixes in each version, newest first, with a heading per version. Open it again any time with **Help > What's New**. To stop it opening after updates, turn off **Open What's New after an update** in **Preferences > General**.
 
 InTome must be able to write to its own folder to update itself. If it can't, it tells you where it saved the download so you can extract it over the InTome folder yourself.
 
