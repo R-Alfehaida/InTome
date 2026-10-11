@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use crate::ai::client::GeminiClient;
 use crate::cancel::CancelToken;
 use crate::document::Document;
-use crate::export::audio::{AudioPipeline, wav_duration_seconds};
-use crate::export::base::{Cancelled, ExportOptions, Exporter, ProgressFn, write_file};
+use crate::export::audio::{self, AudioPipeline, SectionAudio, all_parts};
+use crate::export::audio_parts;
+use crate::export::base::{ExportOptions, Exporter, ProgressFn, write_file};
 use crate::export::exporters::daisy_text;
 use crate::export::util::{escape_html as esc, flat_toc, or_default};
 
@@ -103,20 +104,19 @@ impl Exporter for DaisyAudioExporter {
         let page_count = doc.page_count();
 
         let sections = extract_sections(doc, page_count);
-        let total_steps = page_count + sections.len(); // text pages, then audio sections
-
-        // Nothing is written until all audio is synthesised (in memory), so a cancel or
-        // failure leaves the folder untouched.
-        let text = daisy_text::build(doc, cancel, &mut |c, _, m| progress(c, total_steps, m))?;
         let pairs: Vec<(String, String)> = sections.iter().map(|s| (s.title.clone(), s.text.clone())).collect();
+        let total_steps = page_count + audio::chunk_count(&pairs); // text pages, then audio chunks
+
+        // Nothing goes into the folder until all audio is synthesised (into saved parts),
+        // so a cancel or failure leaves it untouched.
+        let text = daisy_text::build(doc, cancel, &mut |c, _, m| progress(c, total_steps, m))?;
         let audio = AudioPipeline::default().generate_all_sections(&pairs, &options.voice, cancel, &mut |c, _, m| {
             progress(page_count + c, total_steps, m)
         })?;
-        if cancel.is_cancelled() {
-            return Err(Cancelled.into());
-        }
 
-        write_audio_package(&dir, &title, &author, &text, &sections, &audio)
+        let dtbook = write_audio_package(&dir, &title, &author, &text, &sections, &audio)?;
+        audio_parts::discard(&all_parts(&audio));
+        Ok(dtbook)
     }
 }
 
@@ -128,28 +128,22 @@ fn write_audio_package(
     author: &str,
     text: &daisy_text::DaisyText,
     sections: &[Section],
-    audio: &[(String, Vec<u8>)],
+    audio: &[SectionAudio],
 ) -> anyhow::Result<PathBuf> {
+    let dtbook = daisy_text::write_package(dir, text)?;
     let mut total_duration = 0.0;
     let mut ncc_entries = Vec::new();
-    let mut files = Vec::new();
-    for (idx, (section_title, wav)) in audio.iter().enumerate() {
-        if wav.is_empty() {
+    for (idx, section_audio) in audio.iter().enumerate() {
+        if section_audio.is_empty() {
             continue;
         }
         let audio_name = format!("audio_{:03}.wav", idx + 1);
         let smil_name = format!("section_{:03}.smil", idx + 1);
-        let duration = wav_duration_seconds(wav);
+        let duration = section_audio.duration_seconds();
         total_duration += duration;
-        let xml = smil(section_title, &audio_name, duration, idx + 1, sections[idx].start_page);
-        files.push((audio_name, wav, smil_name.clone(), xml));
-        ncc_entries.push((section_title.clone(), smil_name, idx + 1));
-    }
-
-    let dtbook = daisy_text::write_package(dir, text)?;
-    for (audio_name, wav, smil_name, xml) in &files {
-        write_file(&dir.join(audio_name), wav)?;
-        write_file(&dir.join(smil_name), xml)?;
+        audio_parts::write_wav(&dir.join(&audio_name), &section_audio.parts)?;
+        write_file(&dir.join(&smil_name), smil(&section_audio.title, &audio_name, duration, idx + 1, sections[idx].start_page))?;
+        ncc_entries.push((section_audio.title.clone(), smil_name, idx + 1));
     }
     write_file(&dir.join("ncc.html"), ncc(title, author, &ncc_entries, total_duration))?;
     Ok(dtbook)
@@ -162,17 +156,20 @@ mod tests {
     #[test]
     fn package_lists_only_sections_with_audio() {
         use crate::cancel::CancelToken;
-        use crate::export::audio::pcm_to_wav;
         let mut doc = crate::export::tests::sample_doc();
         let text = daisy_text::build(&mut doc, &CancelToken::new(), &mut |_, _, _| {}).unwrap();
         let sections = extract_sections(&mut doc, 3);
         assert_eq!(sections.iter().map(|s| s.start_page).collect::<Vec<_>>(), vec![0, 0, 1, 2]);
-        let one_second = pcm_to_wav(&vec![0u8; 48000]);
+        let parts_dir = tempfile::tempdir().unwrap();
+        let store = audio_parts::PartStore::open(parts_dir.path()).unwrap();
+        // Chapter One is two half-second parts, so its WAV must join them.
+        let half = vec![0u8; 24000];
+        let with = |title: &str, keys: &[&str]| SectionAudio { title: title.to_string(), parts: keys.iter().map(|k| store.put(k, &half).unwrap()).collect() };
         let audio = vec![
-            ("Chapter One: Beginnings".to_string(), one_second.clone()),
-            ("A Section".to_string(), Vec::new()), // synthesis failed
-            ("Chapter Two: Middles".to_string(), one_second),
-            ("Chapter Three: Endings".to_string(), Vec::new()),
+            with("Chapter One: Beginnings", &["a", "b"]),
+            with("A Section", &[]), // no text
+            with("Chapter Two: Middles", &["c", "d"]),
+            with("Chapter Three: Endings", &[]),
         ];
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("export-validation").join("daisy_audio");
         let _ = std::fs::remove_dir_all(&dir);
@@ -188,6 +185,7 @@ mod tests {
         assert!(!ncc.contains("A Section"));
         let smil3 = std::fs::read_to_string(dir.join("section_003.smil")).unwrap();
         assert!(smil3.contains("<text src=\"dtbook.xml#page-2\"/>") && smil3.contains("clip-end=\"1.000s\""));
+        assert_eq!(std::fs::metadata(dir.join("audio_001.wav")).unwrap().len(), 44 + 48000);
     }
 
     #[test]

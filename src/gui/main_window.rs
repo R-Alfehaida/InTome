@@ -1725,13 +1725,16 @@ impl MainWindow {
 
     fn on_clear_cache(&self) {
         let stats = cache::cache_stats();
+        let mb = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
         let text = format!(
-            "Clear all cached document data?\n\nCache size: {:.1} MB, {} entries.",
-            stats.size_bytes as f64 / (1024.0 * 1024.0),
-            stats.entry_count
+            "Clear all cached document data and saved audio export parts?\n\nCache size: {:.1} MB, {} entries.\nSaved audio parts from unfinished exports: {:.1} MB.",
+            mb(stats.size_bytes),
+            stats.entry_count,
+            mb(crate::export::audio_parts::saved_bytes())
         );
         if self.ask(&text, "Clear Cache", true) {
             cache::clear_cache();
+            crate::export::audio_parts::clear_saved();
             announce("Cache cleared");
         }
     }

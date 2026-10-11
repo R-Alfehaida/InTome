@@ -2,6 +2,7 @@
 //! (port of `prism/export`). Annotation export lives in `annotation::exporters`.
 
 pub mod audio;
+pub mod audio_parts;
 pub mod base;
 pub mod exporters;
 pub mod registry;

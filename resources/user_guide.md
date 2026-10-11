@@ -225,6 +225,14 @@ Press **Ctrl+Shift+S** to export the current document to another format. Availab
 
 Audio formats (DAISY audio and M4B) require a configured Gemini API key for text-to-speech.
 
+### Long audio exports
+
+Audio is made a few minutes at a time, and each finished piece is saved on disk as soon as it is ready, so even a very long book doesn't fill your computer's memory. The progress bar counts these pieces.
+
+If an audio export is cancelled, or Gemini keeps failing on a piece, the pieces already made stay saved. When an export fails, InTome tells you which chapter it stopped in. Export the same document again with the same voice and it continues from where it stopped instead of starting over, so you don't pay for the same audio twice. Once an export finishes, its saved pieces are deleted. Pieces from an export you never finish are deleted after 30 days, or straight away with **Tools > Clear Cache**.
+
+M4B export needs ffmpeg for audiobooks of any length. Without ffmpeg, InTome saves a WAV file instead, which can hold at most about 24 hours of audio.
+
 ## Batch Conversion
 
 Press **Ctrl+Shift+P** to open the Batch Convert dialog. Add multiple files, choose an output format and destination folder, then start conversion. Features include:
