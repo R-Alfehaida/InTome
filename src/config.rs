@@ -36,6 +36,11 @@ pub struct General {
     pub recent_files_limit: usize,
     /// Reopen each file at the page and caret it was closed at.
     pub remember_position: bool,
+    /// The version that last ran, so an update opens the changelog once. A fresh
+    /// install starts at the running version; a settings file from before this
+    /// field existed reads as empty, which means it was saved by an older version.
+    #[serde(default)]
+    pub last_run_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,7 +207,13 @@ impl Default for Settings {
 
 impl Default for General {
     fn default() -> Self {
-        Self { continuous_reading: false, page_size: constants::DEFAULT_PAGE_SIZE, recent_files_limit: 10, remember_position: true }
+        Self {
+            continuous_reading: false,
+            page_size: constants::DEFAULT_PAGE_SIZE,
+            recent_files_limit: 10,
+            remember_position: true,
+            last_run_version: constants::APP_VERSION.into(),
+        }
     }
 }
 
@@ -400,6 +411,15 @@ mod tests {
         assert_eq!(g.accuracy_model, "gemini-3.8-flash");
         assert_eq!(g.speed_model, "gemini-3.1-pro-preview");
         assert_eq!(g.tts_model, "gemini-3.8-flash-lite-tts");
+    }
+
+    #[test]
+    fn last_run_version_is_current_when_fresh_and_empty_in_an_older_file() {
+        assert_eq!(Settings::default().general.last_run_version, constants::APP_VERSION);
+        assert_eq!(toml::from_str::<Settings>("").unwrap().general.last_run_version, constants::APP_VERSION);
+        let old: Settings = toml::from_str("[general]\ncontinuous_reading = true\n").unwrap();
+        assert_eq!(old.general.last_run_version, "");
+        assert!(old.general.continuous_reading);
     }
 
     #[test]

@@ -29,7 +29,7 @@ InTome's menus are organized to keep related commands together and reduce the nu
 - **Reference** -- bookmarks, notes, quotes, and Export Annotations
 - **Text-to-Speech** -- Read, Pause/Resume, Stop Reading, and Voice Profiles
 - **Tools** -- Run OCR, Cancel OCR, Label / Scan Form Fields, Fill Form, Clear Cache
-- **Help** -- User Guide, Keyboard Shortcuts, Check for Updates, About
+- **Help** -- User Guide, What's New, Keyboard Shortcuts, Check for Updates, About
 
 Most menu items also have a keyboard shortcut, listed in the sections below.
 
@@ -311,6 +311,8 @@ InTome is designed from the ground up for screen reader users:
 ## Updates
 
 Choose **Help > Check for Updates** to see whether a newer version of InTome is available. InTome checks the project's GitHub releases over HTTPS -- no account, sign-in, or token is required. If a newer version exists, InTome asks whether you want to install it. If you agree, it downloads the new version, verifies its integrity, replaces its own files and restarts. Your settings, bookmarks, notes and reading positions are kept. If you are already running the latest version, InTome simply tells you so.
+
+The first time InTome starts after an update, it opens **What's New**, a list of the new features and fixes in each version, newest first, with a heading per version. Open it again any time with **Help > What's New**.
 
 InTome must be able to write to its own folder to update itself. If it can't, it tells you where it saved the download so you can extract it over the InTome folder yourself.
 

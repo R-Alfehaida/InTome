@@ -93,6 +93,7 @@ pub enum Cmd {
     FillForm,
     ClearCache,
     UserGuide,
+    WhatsNew,
     Shortcuts,
     CheckUpdates,
     About,
@@ -108,12 +109,12 @@ pub enum Cmd {
     SkipBackward,
 }
 
-const ALL_CMDS: [Cmd; 41] = {
+const ALL_CMDS: [Cmd; 42] = {
     use Cmd::*;
     [
         Open, Export, BatchConvert, CloseTab, Exit, Find, SelectAll, Copy, Sidebar, ElementList, Preferences, QuickBookmark, NamedBookmark, AddNote, SaveQuote,
         ListBookmarks, ListNotes, ListQuotes, ExportAnnotations, TtsRead, TtsPause, TtsStop, VoiceProfiles, RunOcr, CancelOcr, LabelFields,
-        FillForm, ClearCache, UserGuide, Shortcuts, CheckUpdates, About, FindNext, FindPrev, FocusNext, FocusPrev, NextTab, PrevTab, Escape,
+        FillForm, ClearCache, UserGuide, WhatsNew, Shortcuts, CheckUpdates, About, FindNext, FindPrev, FocusNext, FocusPrev, NextTab, PrevTab, Escape,
         SkipForward, SkipBackward,
     ]
 };
@@ -297,7 +298,7 @@ const MENUS: &[(&str, &[M])] = {
         ),
         (
             "&Help",
-            &[Item(UserGuide, "User &Guide"), Item(Shortcuts, "&Keyboard Shortcuts"), Sep, Item(CheckUpdates, "Check for &Updates..."), Item(About, "&About")],
+            &[Item(UserGuide, "User &Guide"), Item(WhatsNew, "What's &New"), Item(Shortcuts, "&Keyboard Shortcuts"), Sep, Item(CheckUpdates, "Check for &Updates..."), Item(About, "&About")],
         ),
     ]
 };
@@ -674,8 +675,23 @@ impl MainWindow {
         self.rebuild_recent_menu();
         self.subscribe();
         self.layout();
+        self.show_whats_new_after_update();
+        // Opened after the changelog, so the file the user asked for is the active tab.
         if let Some(path) = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_file()) {
             self.open_file(&path);
+        }
+    }
+
+    /// Opens the changelog once, on the first start after an update.
+    fn show_whats_new_after_update(&self) {
+        let last = config::get().general.last_run_version;
+        if last == APP_VERSION {
+            return;
+        }
+        config::update("general.last_run_version", |s| s.general.last_run_version = APP_VERSION.into());
+        if updated_since(&last, APP_VERSION) {
+            log::info!("updated from {} to {APP_VERSION}; opening the changelog", if last.is_empty() { "an older version" } else { &last });
+            self.on_whats_new();
         }
     }
 
@@ -933,6 +949,7 @@ impl MainWindow {
             Cmd::FillForm => self.on_fill_form(),
             Cmd::ClearCache => self.on_clear_cache(),
             Cmd::UserGuide => self.on_user_guide(),
+            Cmd::WhatsNew => self.on_whats_new(),
             Cmd::Shortcuts => shortcuts_dialog::show(self.wnd()),
             Cmd::CheckUpdates => updater_ui::check_for_updates(self.wnd(), false),
             Cmd::About => self.on_about(),
@@ -1754,6 +1771,21 @@ impl MainWindow {
         }
     }
 
+    fn on_whats_new(&self) {
+        let changelog = resource_path("CHANGELOG.md");
+        if changelog.is_file() {
+            self.open_file(&changelog);
+        } else {
+            show_error(
+                self.wnd(),
+                "What's New Not Found",
+                "The list of changes could not be located.",
+                None,
+                &["Reinstall the application to restore missing files."],
+            );
+        }
+    }
+
     fn on_about(&self) {
         let engines: Vec<&str> = crate::tts::engines::available_engines().iter().map(|e| e.name).collect();
         let text = format!(
@@ -1832,6 +1864,13 @@ fn save_position(v: &ContentView) {
     if config::get().general.remember_position {
         report(AnnotationManager::global().save_position(&v.document_hash(), v.current_page(), v.caret()), "save the reading position");
     }
+}
+
+/// Whether `current` is an update over the version that last ran. Empty means a
+/// settings file from before InTome recorded the version, so an older version.
+/// Going back to an older version shows nothing.
+fn updated_since(last_run: &str, current: &str) -> bool {
+    last_run.is_empty() || crate::updater::is_newer(current, last_run)
 }
 
 fn report<T>(result: anyhow::Result<T>, what: &str) -> Option<T> {
@@ -1932,6 +1971,15 @@ mod tests {
         assert_eq!(table[0].cmd, Cmd::Export as u16);
         assert_eq!(table[1].fVirt, co::ACCELF::VIRTKEY | co::ACCELF::ALT);
         assert_eq!(table[1].cmd, Cmd::SkipBackward as u16);
+    }
+
+    #[test]
+    fn changelog_opens_only_after_an_update() {
+        assert!(updated_since("", "0.0.3"), "a settings file from 0.0.2 or earlier");
+        assert!(updated_since("0.0.2", "0.0.3"));
+        assert!(updated_since("0.0.9", "0.1.0"));
+        assert!(!updated_since("0.0.3", "0.0.3"));
+        assert!(!updated_since("0.1.0", "0.0.3"), "a downgrade");
     }
 
     #[test]
