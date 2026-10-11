@@ -406,8 +406,9 @@ impl ContentView {
         }
         // A selected range is not a resting caret, so selecting to the end (or
         // Select All) never turns the page.
-        let at_end = cp_min == cp_max && cp_max >= offset_len(&shown_text(&self.current_text()));
-        let turn = self.pos.borrow_mut().caret_moved(at_end, Instant::now(), config::get().general.continuous_reading);
+        let continuous = config::get().general.continuous_reading;
+        let at_end = continuous && cp_min == cp_max && cp_max >= offset_len(&shown_text(&self.current_text()));
+        let turn = self.pos.borrow_mut().caret_moved(at_end, Instant::now(), continuous);
         // The outcome never takes focus: a focus event interrupts the screen reader's say-all.
         if let Some(o) = turn {
             let end = o.show.is_none();

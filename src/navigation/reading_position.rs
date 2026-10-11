@@ -91,6 +91,7 @@ impl ReadingPosition {
     fn show(&mut self, index: usize, page_number: bool) -> Outcome {
         self.page = index;
         self.end_announced = false;
+        self.slider = None;
         let page_number = page_number.then(|| format!("Page {} of {}", index + 1, self.page_chars.len()));
         Outcome { show: Some(index), page_number, ..Outcome::default() }
     }
@@ -104,10 +105,7 @@ impl ReadingPosition {
     }
 
     fn go_to_page_quietly(&mut self, index: usize) -> Outcome {
-        if index >= self.page_chars.len() {
-            return Outcome::default();
-        }
-        self.show(index, false)
+        Outcome { page_number: None, ..self.go_to_page(index) }
     }
 
     pub fn next_page(&mut self) -> Outcome {
@@ -368,6 +366,10 @@ mod tests {
 
         let o = p.section_start(Some((0, 1)));
         assert_eq!((o.show, o.page_number, o.speech), (Some(0), None, said("Start of section, page 1")));
+
+        // A TOC entry past the last page turns nowhere but still says its title.
+        let o = p.next_section(&toc(&[("Gone", 9)]));
+        assert_eq!((o.show, o.page_number, o.speech), (None, None, said("Section: Gone")));
     }
 
     #[test]
@@ -406,6 +408,9 @@ mod tests {
         assert_eq!(o, Outcome { show: Some(1), page_number: page_number(2, 2), caret: Caret::Select(0, 0), ..Outcome::default() });
         assert_eq!(p.percent(0), 60, "the slider stays where the user put it");
         assert_eq!(p.percent(11), 70, "a caret move reads the caret again");
+        p.prev_page();
+        p.next_page();
+        assert_eq!(p.percent(0), 33, "a later move back to the same spot reads the caret");
         let o = p.go_to_percent(90, |_| "first line\nsecond line\n".into()); // page 1, char 17
         assert_eq!((o.show, o.caret), (None, Caret::Select(11, 11)));
     }
