@@ -2,7 +2,7 @@
 
 The newest version comes first. Each version lists the features and fixes you'll notice; small internal changes are left out. Press H to move from one version to the next.
 
-## Unreleased
+## 0.0.3 (October 11, 2026)
 
 ### New
 
