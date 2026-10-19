@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "characters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" },
+          "register": { "type": "string", "enum": ["low", "middle", "high"] }
+        },
+        "required": ["id", "name", "aliases", "description", "register"]
+      }
+    }
+  },
+  "required": ["characters"]
+}

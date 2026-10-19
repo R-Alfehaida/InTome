@@ -88,6 +88,19 @@ pub enum GeminiMode {
     Accuracy,
 }
 
+/// How much performance direction an audio export adds before Gemini TTS reads
+/// the text (`ai::expressive`). Off reads the text as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Expressiveness {
+    #[default]
+    Off,
+    /// Styles only lines the book itself describes ("she whispered"), plus speaker pitch.
+    Subtle,
+    /// Also styles lines whose words plainly carry an emotion, and adds more vocal sounds.
+    Dramatic,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Gemini {
@@ -98,6 +111,8 @@ pub struct Gemini {
     pub accuracy_model: String,
     /// Gemini model for read-aloud and audio export.
     pub tts_model: String,
+    /// Text model that casts the characters and marks up the text for expressive narration.
+    pub narration_model: String,
     pub default_mode: GeminiMode,
     pub max_concurrent_pages: u32,
     pub timeout_seconds: u64,
@@ -159,6 +174,10 @@ pub struct Export {
     pub default_format: String,
     pub default_output_dir: String,
     pub batch_concurrent: u32,
+    /// Gemini TTS requests an audio export runs at once.
+    pub audio_concurrent: u32,
+    /// The expressive narration choice from the last audio export.
+    pub expressive: Expressiveness,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -245,6 +264,8 @@ impl Default for Gemini {
             speed_model: "gemini-3.5-flash-lite".into(),
             accuracy_model: "gemini-3.8-flash".into(),
             tts_model: "gemini-3.8-flash-lite-tts".into(),
+            // The cheapest current text model; trials found thinking levels added cost, not accuracy.
+            narration_model: "gemini-3.5-flash-lite".into(),
             default_mode: GeminiMode::Speed,
             max_concurrent_pages: 3,
             timeout_seconds: 60,
@@ -283,7 +304,14 @@ impl Default for Annotations {
 
 impl Default for Export {
     fn default() -> Self {
-        Self { default_format: "text".into(), default_output_dir: String::new(), batch_concurrent: 2 }
+        // Three audio requests at once, like OCR's three pages: well inside Gemini's paid rate limits.
+        Self {
+            default_format: "text".into(),
+            default_output_dir: String::new(),
+            batch_concurrent: 2,
+            audio_concurrent: 3,
+            expressive: Expressiveness::Off,
+        }
     }
 }
 

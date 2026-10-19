@@ -233,10 +233,11 @@ fn gemini(p: &Page, cfg: &Settings) -> Save {
     let speed = p.editable_combo("Speed model:", &g.speed_model);
     let fallback = p.editable_combo("Fallback model:", &g.default_model);
     let tts_model = p.editable_combo("TTS model:", &g.tts_model);
+    let narration_model = p.editable_combo("Expressive narration model:", &g.narration_model);
     let (concurrent_default, timeout_default) = (g.max_concurrent_pages, g.timeout_seconds as u32);
     let concurrent = p.spin("Max concurrent pages:", concurrent_default, 1, 10);
     let timeout = p.spin("Timeout (s):", timeout_default, 10, 300);
-    let combos = [&accuracy, &speed, &fallback, &tts_model].map(|c| c.clone());
+    let combos = [&accuracy, &speed, &fallback, &tts_model, &narration_model].map(|c| c.clone());
     p.parent().on().wm_create(move |_| {
         // Raw handles cross to the worker: the controls themselves are UI-thread only.
         let hwnds = combos.each_ref().map(|c| c.hwnd().ptr() as isize);
@@ -253,14 +254,16 @@ fn gemini(p: &Page, cfg: &Settings) -> Save {
         s.gemini.speed_model = text(&speed);
         s.gemini.default_model = text(&fallback);
         s.gemini.tts_model = text(&tts_model);
+        s.gemini.narration_model = text(&narration_model);
         s.gemini.max_concurrent_pages = spin_value(&concurrent, 1, 10, concurrent_default);
         s.gemini.timeout_seconds = spin_value(&timeout, 10, 300, timeout_default) as u64;
     })
 }
 
-/// Fills the accuracy, speed and fallback drop-downs with text models and the last (TTS)
-/// with TTS models, keeping what each one shows. Skipped if Preferences already closed.
-fn fill_models(hwnds: [isize; 4], models: &[String]) {
+/// Fills the accuracy, speed, fallback and narration drop-downs with text models and the
+/// TTS one (index 3) with TTS models, keeping what each one shows. Skipped if Preferences
+/// already closed.
+fn fill_models(hwnds: [isize; 5], models: &[String]) {
     for (i, ptr) in hwnds.into_iter().enumerate() {
         let combo = unsafe { w::HWND::from_ptr(ptr as _) };
         if !combo.IsWindow() {
@@ -428,6 +431,8 @@ fn export_page(p: &Page, cfg: &Settings) -> Save {
     let (dir, browse) = p.browse("Default output directory:", &cfg.export.default_output_dir);
     let concurrent_default = cfg.export.batch_concurrent;
     let concurrent = p.spin("Batch concurrent files:", concurrent_default, 1, 5);
+    let audio_default = cfg.export.audio_concurrent;
+    let audio = p.spin("Audio export parallel requests:", audio_default, 1, 8);
 
     let (d, page) = (dir.clone(), p.clone());
     browse.on().bn_clicked(move || {
@@ -442,6 +447,7 @@ fn export_page(p: &Page, cfg: &Settings) -> Save {
         }
         s.export.default_output_dir = dir.text().unwrap_or_default().trim().to_string();
         s.export.batch_concurrent = spin_value(&concurrent, 1, 5, concurrent_default);
+        s.export.audio_concurrent = spin_value(&audio, 1, 8, audio_default);
     })
 }
 

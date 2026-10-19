@@ -1,6 +1,7 @@
 //! AI integration: OCR (Gemini cloud, Windows OCR and Tesseract local),
 //! structure parsing, form-field labelling, and Gemini TTS audio.
 pub mod client;
+pub mod expressive;
 pub mod ocr;
 pub mod processing;
 pub mod prompts;

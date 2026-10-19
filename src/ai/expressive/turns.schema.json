@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "turns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "speaker": { "type": "string", "enum": ["narrator", "unknown"] },
+          "style": { "type": "string", "enum": ["", "whispered", "hushed and tense", "quiet and serious", "raised voice, angry", "impatient", "shouting", "breathless", "tearful", "laughing", "sarcastic", "warm and gentle", "excited", "frightened", "slow and somber"] },
+          "text": { "type": "string" }
+        },
+        "required": ["speaker", "style", "text"]
+      }
+    }
+  },
+  "required": ["turns"]
+}

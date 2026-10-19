@@ -76,9 +76,23 @@ enum Failure {
     Retry { delay_secs: f64 },
 }
 
+/// Seconds Google asks to wait before retrying ("please retry in 33.6s" or
+/// `"retryDelay": "33s"`), capped at a minute.
+fn retry_hint(error_lower: &str) -> Option<f64> {
+    static HINT: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r#"retry in ([0-9.]+)s|retrydelay"?\s*:\s*"([0-9.]+)s"#).unwrap());
+    let caps = HINT.captures(error_lower)?;
+    let secs: f64 = caps.get(1).or_else(|| caps.get(2))?.as_str().parse().ok()?;
+    Some(secs.clamp(1.0, 60.0))
+}
+
 fn classify_failure(error_lower: &str, attempt: u32) -> Failure {
     if error_lower.contains("invalid api key") || error_lower.contains("permission") {
         Failure::Auth
+    // A per-minute rate limit says when to try again; a used-up quota doesn't. Parallel
+    // audio export hits per-minute limits sooner than one request at a time did.
+    } else if let Some(delay_secs) = retry_hint(error_lower).filter(|_| !error_lower.contains("limit: 0")) {
+        Failure::Retry { delay_secs }
     // Quota exhausted (limit 0 = model has no free tier).
     } else if error_lower.contains("resource_exhausted") || (error_lower.contains("quota") && error_lower.contains("limit: 0")) {
         Failure::Quota
@@ -112,9 +126,14 @@ fn image_request(image: &[u8], mime_type: &str, prompt: &str, system_instruction
 
 // No `mime_type` in `response_format`: 3.8 TTS models default to WAV and older ones to
 // raw PCM, and the older ones reject an explicit `audio/l16`. Both are 24 kHz 16-bit mono.
-fn audio_request(text: &str, voice: &str) -> Value {
+/// A plain TTS text item. Expressive narration sends several, each with its own style.
+pub fn text_item(text: &str) -> Value {
+    json!({ "type": "text", "text": text })
+}
+
+fn audio_request(items: Vec<Value>, voice: &str) -> Value {
     json!({
-        "input": [{ "type": "user_input", "content": [{ "type": "text", "text": text }] }],
+        "input": [{ "type": "user_input", "content": items }],
         "response_format": { "type": "audio" },
         "generation_config": { "speech_config": [{ "voice": voice }] },
         "store": false,
@@ -309,34 +328,64 @@ impl GeminiClient {
 
     /// Text to raw PCM (24 kHz, 16-bit, mono).
     pub fn generate_audio(&self, text: &str, voice: &str, model: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<u8>> {
-        let mut body = audio_request(text, voice);
+        self.generate_audio_items(vec![text_item(text)], voice, model, cancel)
+    }
+
+    /// Text items (each with an optional `speech_metadata` style) to raw PCM (24 kHz, 16-bit, mono).
+    pub fn generate_audio_items(&self, items: Vec<Value>, voice: &str, model: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<u8>> {
+        let mut body = audio_request(items, voice);
         body["model"] = json!(model);
+        let data = self.request("TTS", model, &body, cancel, |response| {
+            response_audio(response).map(str::to_string).ok_or_else(|| format!("response has no audio data: status {}", response["status"]))
+        })?;
+        Ok(pcm_from_audio(B64.decode(data)?))
+    }
+
+    /// One text request whose reply must match the JSON `schema`, parsed.
+    pub fn generate_json(&self, model: &str, system_instruction: &str, input: &str, schema: &Value, cancel: Option<&CancelToken>) -> anyhow::Result<Value> {
+        let body = json!({
+            "model": model,
+            "system_instruction": system_instruction,
+            "input": input,
+            "response_format": { "type": "text", "mime_type": "application/json", "schema": schema },
+            "store": false,
+        });
+        self.request("text", model, &body, cancel, |response| {
+            serde_json::from_str(&strip_code_fence(&response_text(response))).map_err(|e| format!("reply is not the requested JSON: {e}"))
+        })
+    }
+
+    /// Sends `body` with retries and backoff until `parse` accepts the reply. One
+    /// model, no fallback; "not found" just retries, as Prism's TTS did.
+    fn request<T>(&self, what: &str, model: &str, body: &Value, cancel: Option<&CancelToken>, parse: impl Fn(&Value) -> Result<T, String>) -> anyhow::Result<T> {
         let mut last_error = String::new();
         for attempt in 0..MAX_RETRIES {
             if cancel.is_some_and(CancelToken::is_cancelled) {
                 bail!("Operation cancelled");
             }
-            let err = match self.post(&body) {
-                Ok(response) => match response_audio(&response) {
-                    Some(data) => return Ok(pcm_from_audio(B64.decode(data)?)),
-                    None => format!("response has no audio data: status {}", response["status"]),
+            let err = match self.post(body) {
+                Ok(response) => match parse(&response) {
+                    Ok(value) => return Ok(value),
+                    Err(e) => e,
                 },
                 Err(e) => e,
             };
-            let lower = err.to_lowercase();
-            match classify_failure(&lower, attempt) {
+            let failure = classify_failure(&err.to_lowercase(), attempt);
+            match failure {
                 Failure::Auth => bail!("Authentication error: {err}"),
-                Failure::Quota => bail!("Quota exhausted for TTS model '{model}'. Try again later or upgrade to a paid API plan."),
-                // TTS has no fallback model, so "not found" just retries like Prism.
+                Failure::Quota => bail!("Quota exhausted for {what} model '{model}'. Try again later or upgrade to a paid API plan."),
                 Failure::NextModel | Failure::Retry { .. } => {
-                    let delay = BASE_DELAY_SECS * 2f64.powi(attempt as i32);
-                    log::warn!("Gemini TTS request failed (attempt {}/{MAX_RETRIES}): {err}. Retrying in {delay:.1}s", attempt + 1);
+                    let delay = match failure {
+                        Failure::Retry { delay_secs } => delay_secs,
+                        _ => BASE_DELAY_SECS * 2f64.powi(attempt as i32),
+                    };
+                    log::warn!("Gemini {what} request failed (attempt {}/{MAX_RETRIES}): {err}. Retrying in {delay:.1}s", attempt + 1);
                     last_error = err;
                     std::thread::sleep(Duration::from_secs_f64(delay));
                 }
             }
         }
-        bail!("Gemini TTS request failed after all retries: {last_error}")
+        bail!("Gemini {what} request failed after all retries: {last_error}")
     }
 }
 
@@ -391,6 +440,17 @@ mod tests {
     }
 
     #[test]
+    fn a_rate_limit_that_says_when_to_retry_is_retried_after_that_delay() {
+        let per_minute = "429 {\"error\":{\"message\":\"quota exceeded for metric requests per minute, limit: 10. please retry in 33.6s.\",\"status\":\"resource_exhausted\"}}";
+        assert_eq!(classify_failure(per_minute, 0), Failure::Retry { delay_secs: 33.6 });
+        assert_eq!(classify_failure("429 resource_exhausted \"retrydelay\": \"12s\"", 1), Failure::Retry { delay_secs: 12.0 });
+        assert_eq!(classify_failure("429 resource_exhausted, please retry in 500s", 0), Failure::Retry { delay_secs: 60.0 }, "capped");
+        // No free tier, or no hint: still a quota error that stops at once.
+        assert_eq!(classify_failure("429 resource_exhausted limit: 0, please retry in 30s", 0), Failure::Quota);
+        assert_eq!(classify_failure("429 {\"status\": \"resource_exhausted\"}", 0), Failure::Quota);
+    }
+
+    #[test]
     fn image_request_matches_interactions_shape() {
         let body = image_request(b"\x89PNG", "image/png", "Extract.", "You are OCR.", true);
         assert_eq!(
@@ -413,7 +473,7 @@ mod tests {
     #[test]
     fn audio_request_matches_interactions_shape() {
         assert_eq!(
-            audio_request("Hi.", "Kore"),
+            audio_request(vec![text_item("Hi.")], "Kore"),
             json!({
                 "input": [{ "type": "user_input", "content": [{ "type": "text", "text": "Hi." }] }],
                 "response_format": { "type": "audio" },

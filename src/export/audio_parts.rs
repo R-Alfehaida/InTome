@@ -53,26 +53,32 @@ impl PartStore {
         hex::encode(Sha256::digest(format!("{FORMAT}\0{model}\0{voice}\0{text}").as_bytes()))
     }
 
-    fn path(&self, key: &str) -> PathBuf {
-        self.dir.join(format!("{key}.pcm"))
+    /// The saved audio part for `key`, if a finished one exists.
+    pub fn get(&self, key: &str) -> Option<Part> {
+        self.get_file(key, "pcm")
     }
 
-    /// The saved part for `key`, if a finished one exists.
-    pub fn get(&self, key: &str) -> Option<Part> {
-        let path = self.path(key);
+    /// Saves audio `pcm` under `key`.
+    pub fn put(&self, key: &str, pcm: &[u8]) -> io::Result<Part> {
+        self.put_file(key, "pcm", pcm)
+    }
+
+    /// A saved file of kind `ext` (such as the expressive cast, "json") for `key`.
+    pub fn get_file(&self, key: &str, ext: &str) -> Option<Part> {
+        let path = self.dir.join(format!("{key}.{ext}"));
         let bytes = std::fs::metadata(&path).ok().filter(|m| m.is_file())?.len();
         Some(Part { path, bytes })
     }
 
-    /// Saves `pcm` under `key`. It is written to a temporary name and renamed,
-    /// so a crash mid-write never leaves a truncated part that a later export
-    /// would reuse.
-    pub fn put(&self, key: &str, pcm: &[u8]) -> io::Result<Part> {
-        let path = self.path(key);
-        let tmp = self.dir.join(format!("{key}.tmp"));
-        std::fs::write(&tmp, pcm)?;
+    /// Saves `data` under `key` as kind `ext`. It is written to a temporary name and
+    /// renamed, so a crash mid-write never leaves a truncated file that a later
+    /// export would reuse.
+    pub fn put_file(&self, key: &str, ext: &str, data: &[u8]) -> io::Result<Part> {
+        let path = self.dir.join(format!("{key}.{ext}"));
+        let tmp = self.dir.join(format!("{key}.{ext}.tmp"));
+        std::fs::write(&tmp, data)?;
         std::fs::rename(&tmp, &path)?;
-        Ok(Part { path, bytes: pcm.len() as u64 })
+        Ok(Part { path, bytes: data.len() as u64 })
     }
 
     /// Removes parts and leftover temporary files not modified within `max_age`.
@@ -175,7 +181,10 @@ mod tests {
         let part = s.put("abc", &[1, 2, 3, 4]).unwrap();
         assert_eq!(s.get("abc"), Some(part.clone()));
         assert_eq!(part.bytes, 4);
-        assert!(!part.path.with_extension("tmp").exists());
+        assert!(!part.path.with_extension("pcm.tmp").exists());
+        let cast = s.put_file("abc", "json", b"[]").unwrap();
+        assert_eq!(s.get_file("abc", "json"), Some(cast));
+        assert_eq!(s.get("abc"), Some(part.clone()), "a file of another kind is separate");
         discard(&[part]);
         assert_eq!(s.get("abc"), None);
     }

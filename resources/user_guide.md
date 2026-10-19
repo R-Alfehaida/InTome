@@ -229,9 +229,21 @@ Press **Ctrl+Shift+S** to export the current document to another format. Availab
 
 Audio formats (DAISY audio and M4B) require a configured Gemini API key for text-to-speech.
 
+### Expressive narration
+
+For DAISY audio and M4B, the Export dialog's Options include **Expressive narration**: Off, Subtle or Dramatic. InTome remembers your choice for the next export.
+
+- **Off** reads the text as it is, in one voice.
+- **Subtle** first finds the book's characters and gives each one their own pitch, so in a conversation you can tell who is speaking even without "he said". Lines the book describes, such as "she whispered" or "cried his wife, impatiently", are read that way, and sounds the book mentions, such as a sigh or a laugh, are added.
+- **Dramatic** does all that and also acts out lines whose words plainly carry an emotion, even when the book doesn't say how they were spoken.
+
+The words are never changed: InTome checks every passage, and if Gemini changed a word it reads that passage plainly instead. Expressive narration makes extra Gemini requests, so the export takes a little longer and costs about a fifth more. The model it uses is set under **Preferences > Gemini Models > Expressive narration model**.
+
 ### Long audio exports
 
 Audio is made a few minutes at a time, and each finished piece is saved on disk as soon as it is ready, so even a very long book doesn't fill your computer's memory. The progress bar counts these pieces.
+
+InTome asks Gemini for three pieces at once, which makes a long book about three times faster than one piece at a time. You can change this under **Preferences > Export > Audio export parallel requests**, from 1 to 8. More is faster, but if Gemini says you are sending requests too quickly, InTome waits as long as Gemini asks and tries again; if you see that often, lower the number.
 
 If an audio export is cancelled, or Gemini keeps failing on a piece, the pieces already made stay saved. When an export fails, InTome tells you which chapter it stopped in. Export the same document again with the same voice and it continues from where it stopped instead of starting over, so you don't pay for the same audio twice. Once an export finishes, its saved pieces are deleted. Pieces from an export you never finish are deleted after 30 days, or straight away with **Tools > Clear Cache**.
 
@@ -254,11 +266,11 @@ Press **Ctrl+Comma** to open the Preferences dialog. Settings are organized into
 - **General** -- continuous reading, recent files limit, remember reading position, open What's New after an update, check for updates on startup
 - **Display** -- font, font size, OpenDyslexic toggle, line spacing
 - **Document** -- PDF reading mode, cache settings
-- **Gemini Models** -- model selection, mode, concurrency, timeout
+- **Gemini Models** -- model selection (including the expressive narration model), mode, concurrency, timeout
 - **OCR** -- render DPI, manga mode, custom prompts
 - **AI Providers** -- OCR backend, Gemini cloud API key, local models (Surya, Tesseract)
 - **TTS** -- voice profile, reading scope, start-from setting
-- **Export** -- default format, output directory, batch concurrency
+- **Export** -- default format, output directory, batch concurrency, audio export parallel requests
 - **Privacy** -- cache info and clear, annotation management
 
 ### Setting Your Gemini API Key

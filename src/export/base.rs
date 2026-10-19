@@ -20,6 +20,8 @@ pub struct ExportOptions {
     pub accessibility_metadata: bool,
     /// Gemini TTS voice for the audio formats.
     pub voice: String,
+    /// Audio formats: performance direction added before Gemini TTS reads the text.
+    pub expressive: crate::config::Expressiveness,
     /// 0-100. Prism accepts it but never applied it; kept for the dialog.
     pub audio_speed: u32,
 }
@@ -34,6 +36,7 @@ impl ExportOptions {
             include_toc: true,
             accessibility_metadata: true,
             voice: "Kore".into(),
+            expressive: crate::config::Expressiveness::Off,
             audio_speed: 50,
         }
     }

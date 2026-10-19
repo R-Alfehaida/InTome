@@ -168,7 +168,8 @@ impl Exporter for M4bExporter {
         let sections = extract_chapters(doc);
         let chunks = audio::chunk_count(&sections);
         let total_steps = chunks + 1; // one per audio chunk, then encoding
-        let audio = AudioPipeline::default().generate_all_sections(&sections, &options.voice, cancel, &mut |c, _, m| progress(c, total_steps, m))?;
+        let pipeline = AudioPipeline::new(options.expressive);
+        let audio = pipeline.generate_all_sections(&sections, &options.voice, cancel, &mut |c, _, m| progress(c, total_steps, m))?;
         // Chapters without text have no audio and no marker.
         let spoken: Vec<SectionAudio> = audio.iter().filter(|s| !s.is_empty()).cloned().collect();
         if spoken.is_empty() {
@@ -183,7 +184,7 @@ impl Exporter for M4bExporter {
             audio_parts::write_wav(&wav_path, &all_parts(&spoken))?;
             wav_path
         };
-        audio_parts::discard(&all_parts(&audio));
+        pipeline.discard(&audio);
         progress(total_steps, total_steps, "Export complete");
         Ok(out)
     }
@@ -306,7 +307,8 @@ mod tests {
         let err = M4bExporter.export(&mut *doc, &options, &cancel, &mut |c, _, _| if c == 1 { cancel.cancel() }).unwrap_err();
         assert!(err.downcast_ref::<crate::export::base::Cancelled>().is_some(), "{err:#}");
         let kept: Vec<_> = saved_parts().difference(&before).cloned().collect();
-        assert_eq!(kept.len(), 1, "one finished part kept: {kept:?}");
+        // With parallel workers, a chunk already in flight when the cancel lands also finishes and is kept.
+        assert!((1..=2).contains(&kept.len()), "finished parts kept: {kept:?}");
 
         // Exporting again finishes, reuses that part, and then deletes every part it used.
         let mut steps = Vec::new();
@@ -318,6 +320,33 @@ mod tests {
         let chapters: Vec<&str> = json["chapters"].as_array().unwrap().iter().map(|c| c["tags"]["title"].as_str().unwrap()).collect();
         println!("steps: {steps:#?}\nchapters: {chapters:?}\nduration: {}", json["format"]["duration"]);
         assert!(!chapters.is_empty());
+    }
+
+    #[test]
+    #[ignore = "live Gemini (casting, markup and TTS for about 5 minutes of audio); needs ffmpeg, a key and the trial's Pride and Prejudice excerpt"]
+    fn live_expressive_export_makes_an_audiobook_and_cleans_up() {
+        use crate::document::{OpenOptions, registry};
+        // Shows the cast and any passage read plainly after failing the checks.
+        let _ = simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default());
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let text = std::env::var("INTOME_EXPRESSIVE_TEXT").map(std::path::PathBuf::from).unwrap_or_else(|_| root.join("target/expressive_trial/books/pp_chapter1.txt"));
+        let mode = match std::env::var("INTOME_EXPRESSIVE_MODE").as_deref() {
+            Ok("dramatic") => crate::config::Expressiveness::Dramatic,
+            _ => crate::config::Expressiveness::Subtle,
+        };
+        let mut doc = registry::open_document(&text, &OpenOptions::default()).unwrap();
+        let dir = root.join("target").join("live-export");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut options = ExportOptions::new(dir.join(format!("expressive-{mode:?}.m4b")));
+        options.expressive = mode;
+        let before = saved_parts();
+        let mut steps = Vec::new();
+        let out = M4bExporter.export(&mut *doc, &options, &CancelToken::new(), &mut |c, t, m| steps.push(format!("{c}/{t} {m}"))).unwrap();
+        assert!(saved_parts().difference(&before).next().is_none(), "parts or the cast left behind");
+        let probe = Command::new("ffprobe").args(["-v", "error", "-show_format", "-of", "json"]).arg(&out).output().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+        println!("out: {}\nsteps: {steps:#?}\nduration: {}", out.display(), json["format"]["duration"]);
+        assert!(steps[0].ends_with("Finding the characters in the book..."));
     }
 
     #[test]

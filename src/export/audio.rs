@@ -1,13 +1,14 @@
 //! Shared audio pipeline for generating TTS audio via Gemini (port of `prism/export/audio.py`).
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 use anyhow::Context;
 use regex::Regex;
 
 use crate::ai::client::GeminiClient;
+use crate::ai::expressive::{self, Character, Narrator};
 use crate::cancel::CancelToken;
-use crate::config;
+use crate::config::{self, Expressiveness};
 use crate::document::{Document, TocEntry};
 use crate::export::audio_parts::{self, Part, PartStore};
 use crate::export::base::Cancelled;
@@ -207,15 +208,64 @@ pub fn all_parts(sections: &[SectionAudio]) -> Vec<Part> {
 /// Generates audio for document sections via Gemini TTS.
 pub struct AudioPipeline {
     model: String,
+    narration_model: String,
+    expressive: Expressiveness,
+    /// The saved cast of an expressive export, deleted with the audio parts.
+    cast_file: Mutex<Option<Part>>,
 }
 
 impl Default for AudioPipeline {
     fn default() -> Self {
-        Self { model: config::get().gemini.tts_model }
+        Self::new(Expressiveness::Off)
     }
 }
 
 impl AudioPipeline {
+    /// A pipeline that reads the text as it is (`Off`) or marks it up first ([`expressive`]).
+    pub fn new(expressive: Expressiveness) -> Self {
+        let gemini = config::get().gemini;
+        Self { model: gemini.tts_model, narration_model: gemini.narration_model, expressive, cast_file: Mutex::new(None) }
+    }
+
+    /// Deletes the saved parts (and cast) behind `audio`, for when the export that
+    /// used them has succeeded.
+    pub fn discard(&self, audio: &[SectionAudio]) {
+        audio_parts::discard(&all_parts(audio));
+        if let Some(cast) = self.cast_file.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            audio_parts::discard(&[cast]);
+        }
+    }
+
+    /// The book's characters for expressive narration, cast part by part with the
+    /// cast so far. Saved beside the audio parts, so a resumed export keeps the
+    /// same characters and pitches and so reuses the audio it already made.
+    fn cast(&self, store: &PartStore, client: &GeminiClient, sections: &[(String, String)], cancel: &CancelToken) -> anyhow::Result<Vec<Character>> {
+        let text = sections.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n\n");
+        let key = PartStore::key(&self.narration_model, "cast-v1", &text);
+        let saved = store.get_file(&key, "json").and_then(|part| {
+            let cast = std::fs::read(&part.path).ok().and_then(|data| serde_json::from_slice(&data).ok())?;
+            Some((part, cast))
+        });
+        let (part, cast) = match saved {
+            Some(found) => found,
+            None => {
+                let mut cast = Vec::new();
+                for part in split_text_for_tts(&text, expressive::CAST_PART_CHARS) {
+                    if cancel.is_cancelled() {
+                        return Err(Cancelled.into());
+                    }
+                    let reply = client
+                        .generate_json(&self.narration_model, expressive::casting_prompt(), &expressive::cast_input(&cast, &part), &expressive::cast_schema(), Some(cancel))
+                        .map_err(|e| if cancel.is_cancelled() { Cancelled.into() } else { e.context("Could not find the book's characters for expressive narration") })?;
+                    cast = expressive::merge_cast(&cast, expressive::parse_cast(&reply)?);
+                }
+                (store.put_file(&key, "json", &serde_json::to_vec(&cast)?).context("cannot save the cast")?, cast)
+            }
+        };
+        log::info!("expressive narration cast: {}", cast.iter().map(|c| format!("{} ({})", c.id, c.register)).collect::<Vec<_>>().join(", "));
+        *self.cast_file.lock().unwrap_or_else(|e| e.into_inner()) = Some(part);
+        Ok(cast)
+    }
     /// Synthesises every section chunk by chunk ([`split_text_for_tts`]) into saved
     /// parts, reusing parts an earlier, unfinished export already made. Returns one
     /// [`SectionAudio`] per section, in order.
@@ -223,7 +273,8 @@ impl AudioPipeline {
     /// A chunk that still fails after the client's retries stops the export with an
     /// error naming its section: a book with a silently missing chapter is worse than
     /// no book, and the saved parts make trying again cheap. Cancelling returns
-    /// [`Cancelled`] and also keeps the parts.
+    /// [`Cancelled`] and also keeps the parts. `export.audio_concurrent` chunks are
+    /// synthesised at once.
     pub fn generate_all_sections(
         &self,
         sections: &[(String, String)],
@@ -232,69 +283,151 @@ impl AudioPipeline {
         progress: &mut dyn FnMut(usize, usize, &str),
     ) -> anyhow::Result<Vec<SectionAudio>> {
         let store = PartStore::open(audio_parts::parts_dir()).context("cannot create the folder for saved audio parts")?;
-        let mut client = None;
-        let mut synth = |text: &str| -> anyhow::Result<Vec<u8>> {
-            if client.is_none() {
-                client = Some(GeminiClient::new()?);
-            }
-            client.as_ref().unwrap().generate_audio(text, voice, &self.model, Some(cancel))
+        let client = GeminiClient::new()?;
+        let workers = config::get().export.audio_concurrent.max(1) as usize;
+        if self.expressive == Expressiveness::Off {
+            let synth = |text: &str, _context: &str| client.generate_audio(text, voice, &self.model, Some(cancel));
+            return generate_with(&store, &self.model, "", sections, voice, cancel, progress, &synth, workers);
+        }
+        progress(0, chunk_count(sections), "Finding the characters in the book...");
+        let cast = self.cast(&store, &client, sections, cancel)?;
+        // Audio made in another mode, by another narration model or with another cast is never reused.
+        let cast_id = PartStore::key(&self.narration_model, "cast", &serde_json::to_string(&cast)?);
+        let salt = format!("expressive-{:?}-{}-{cast_id}", self.expressive, self.narration_model);
+        let narrator = Narrator::new(&client, &self.narration_model, self.expressive, cast);
+        let synth = |text: &str, context: &str| {
+            let items = narrator.items(context, text, Some(cancel))?;
+            client.generate_audio_items(items, voice, &self.model, Some(cancel))
         };
-        generate_with(&store, &self.model, sections, voice, cancel, progress, &mut synth)
+        generate_with(&store, &self.model, &salt, sections, voice, cancel, progress, &synth, workers)
     }
 }
 
+/// One TTS chunk to make: where it sits in the book and the key its saved part has.
+struct Job<'a> {
+    section: usize,
+    /// 0-based chunk within its section, of `of`.
+    index: usize,
+    of: usize,
+    text: &'a str,
+    /// Up to two paragraphs before the chunk in its section, for expressive
+    /// narration to see the scene and who spoke last. Empty at a section's start.
+    context: String,
+    key: String,
+}
+
+/// The last two paragraphs of `previous`.
+fn context_after(previous: &str) -> String {
+    let paragraphs: Vec<&str> = PARAGRAPH_BREAK.split(previous).filter(|p| !p.trim().is_empty()).collect();
+    paragraphs[paragraphs.len().saturating_sub(2)..].join("\n\n")
+}
+
 /// [`AudioPipeline::generate_all_sections`] with the synthesiser passed in, so tests
-/// need no network. `progress` counts chunks, not sections, so a long chapter moves
-/// the bar too.
+/// need no network. Saved parts are reused first; the rest go to `workers` threads,
+/// which take chunks in reading order and save each as it finishes. A failure or a
+/// cancel stops new chunks from starting, and the chunks already in progress finish
+/// and are saved, so trying again loses nothing. `progress` counts chunks, not
+/// sections, so a long chapter moves the bar too.
+/// `salt` names everything besides model, voice and text that shaped the audio
+/// (empty for plain reading), so it is part of each saved part's key. `synth`
+/// gets a chunk's text and its [`Job::context`].
+#[allow(clippy::too_many_arguments)]
 fn generate_with(
     store: &PartStore,
     model: &str,
+    salt: &str,
     sections: &[(String, String)],
     voice: &str,
     cancel: &CancelToken,
     progress: &mut dyn FnMut(usize, usize, &str),
-    synth: &mut dyn FnMut(&str) -> anyhow::Result<Vec<u8>>,
+    synth: &(dyn Fn(&str, &str) -> anyhow::Result<Vec<u8>> + Sync),
+    workers: usize,
 ) -> anyhow::Result<Vec<SectionAudio>> {
-    let plan: Vec<(&String, Vec<String>)> = sections.iter().map(|(title, text)| (title, split_text_for_tts(text, TTS_CHUNK_CHAR_BUDGET))).collect();
-    let total = plan.iter().map(|(_, chunks)| chunks.len()).sum::<usize>();
-    let (mut done, mut reused) = (0, 0);
-    let mut out = Vec::with_capacity(plan.len());
-    for (title, chunks) in plan {
-        let mut parts = Vec::with_capacity(chunks.len());
-        for (i, chunk) in chunks.iter().enumerate() {
-            if cancel.is_cancelled() {
-                return Err(Cancelled.into());
-            }
-            let key = PartStore::key(model, voice, chunk);
-            let part = match store.get(&key) {
-                Some(part) => {
-                    reused += 1;
-                    part
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let chunks: Vec<Vec<String>> = sections.iter().map(|(_, text)| split_text_for_tts(text, TTS_CHUNK_CHAR_BUDGET)).collect();
+    let key = |text: &str| if salt.is_empty() { PartStore::key(model, voice, text) } else { PartStore::key(model, voice, &format!("{salt}\0{text}")) };
+    let jobs: Vec<Job> = chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(section, list)| {
+            list.iter().enumerate().map(move |(index, text)| Job {
+                section,
+                index,
+                of: list.len(),
+                text,
+                context: index.checked_sub(1).map(|i| context_after(&list[i])).unwrap_or_default(),
+                key: key(text),
+            })
+        })
+        .collect();
+    let total = jobs.len();
+    let mut slots: Vec<Option<Part>> = jobs.iter().map(|j| store.get(&j.key)).collect();
+    let pending: Vec<usize> = (0..total).filter(|&i| slots[i].is_none()).collect();
+    let mut done = total - pending.len();
+    if done > 0 {
+        log::info!("audio export reused {done} of {total} saved parts");
+        progress(done, total, &format!("Reusing {done} saved parts of {total}"));
+    }
+
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let mut first_error: Option<(usize, anyhow::Error)> = None;
+    std::thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, anyhow::Result<Part>)>();
+        for _ in 0..workers.max(1).min(pending.len()) {
+            let (tx, next, stop, jobs, pending) = (tx.clone(), &next, &stop, &jobs, &pending);
+            scope.spawn(move || {
+                while !stop.load(Ordering::Relaxed) && !cancel.is_cancelled() {
+                    let Some(&i) = pending.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                    let job = &jobs[i];
+                    let result = synth(job.text, &job.context).and_then(|pcm| store.put(&job.key, &pcm).context("cannot save a finished audio part"));
+                    if result.is_err() {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    if tx.send((i, result)).is_err() {
+                        break;
+                    }
                 }
-                None => {
-                    let pcm = synth(chunk).map_err(|e| {
-                        if cancel.is_cancelled() {
-                            return Cancelled.into();
-                        }
-                        e.context(format!(
-                            "Could not make the audio for \"{title}\" (part {} of {}). The audio made so far is saved, so exporting again continues from here",
-                            i + 1,
-                            chunks.len()
-                        ))
-                    })?;
-                    store.put(&key, &pcm).context("cannot save a finished audio part")?
-                }
-            };
-            parts.push(part);
-            done += 1;
-            progress(done, total, &format!("Audio {done} of {total}: {title}"));
+            });
         }
-        out.push(SectionAudio { title: title.clone(), parts });
+        drop(tx);
+        // Results arrive here, on the calling thread, as each chunk finishes.
+        for (i, result) in rx {
+            match result {
+                Ok(part) => {
+                    slots[i] = Some(part);
+                    done += 1;
+                    progress(done, total, &format!("Audio {done} of {total}: {}", sections[jobs[i].section].0));
+                }
+                Err(e) => {
+                    // The earliest failing chunk in reading order is the one reported.
+                    if first_error.as_ref().is_none_or(|(at, _)| i < *at) {
+                        first_error = Some((i, e));
+                    }
+                }
+            }
+        }
+    });
+
+    if cancel.is_cancelled() {
+        return Err(Cancelled.into());
     }
-    if reused > 0 {
-        log::info!("audio export reused {reused} of {total} saved parts");
+    if let Some((i, e)) = first_error {
+        let job = &jobs[i];
+        return Err(e.context(format!(
+            "Could not make the audio for \"{}\" (part {} of {}). The audio made so far is saved, so exporting again continues from here",
+            sections[job.section].0,
+            job.index + 1,
+            job.of
+        )));
     }
-    Ok(out)
+    let mut parts = slots.into_iter();
+    Ok(sections
+        .iter()
+        .zip(&chunks)
+        .map(|((title, _), list)| SectionAudio { title: title.clone(), parts: parts.by_ref().take(list.len()).map(|p| p.expect("every chunk finished")).collect() })
+        .collect())
 }
 
 #[cfg(test)]
@@ -346,10 +479,11 @@ mod tests {
         texts.iter().map(|(t, x)| (t.to_string(), x.to_string())).collect()
     }
 
-    /// A fake synthesiser: 2 bytes of "audio" per character, so durations are predictable.
-    fn fake(calls: &mut Vec<String>) -> impl FnMut(&str) -> anyhow::Result<Vec<u8>> + '_ {
-        move |text: &str| {
-            calls.push(text.to_string());
+    /// A fake synthesiser: 2 bytes of "audio" per character, so durations are
+    /// predictable, recording each text it was asked for.
+    fn fake(calls: &std::sync::Mutex<Vec<String>>) -> impl Fn(&str, &str) -> anyhow::Result<Vec<u8>> + Sync + '_ {
+        move |text: &str, _context: &str| {
+            calls.lock().unwrap().push(text.to_string());
             Ok(vec![7; text.chars().count() * 2])
         }
     }
@@ -358,11 +492,11 @@ mod tests {
     fn sections_become_saved_parts_and_empty_sections_stay_empty() {
         let dir = tempfile::tempdir().unwrap();
         let store = PartStore::open(dir.path()).unwrap();
-        let (mut calls, mut steps) = (Vec::new(), Vec::new());
+        let (calls, mut steps) = (Default::default(), Vec::new());
         let input = sections(&[("One", "Hello there."), ("Blank", "  \n"), ("Two", "Bye.")]);
-        let out = generate_with(&store, "m", &input, "Kore", &CancelToken::new(), &mut |d, t, m| steps.push(format!("{d}/{t} {m}")), &mut fake(&mut calls))
+        let out = generate_with(&store, "m", "", &input, "Kore", &CancelToken::new(), &mut |d, t, m| steps.push(format!("{d}/{t} {m}")), &fake(&calls), 1)
             .unwrap();
-        assert_eq!(calls, ["Hello there.", "Bye."]);
+        assert_eq!(*calls.lock().unwrap(), ["Hello there.", "Bye."]);
         assert_eq!(steps, ["1/2 Audio 1 of 2: One", "2/2 Audio 2 of 2: Two"]);
         assert_eq!(out.iter().map(|s| (s.title.as_str(), s.parts.len())).collect::<Vec<_>>(), [("One", 1), ("Blank", 0), ("Two", 1)]);
         assert_eq!(out[0].pcm_bytes(), 24);
@@ -371,26 +505,99 @@ mod tests {
     }
 
     #[test]
+    fn parallel_workers_overlap_and_keep_reading_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let store = PartStore::open(dir.path()).unwrap();
+        let texts: Vec<String> = (0..9).map(|i| format!("Chunk {i}.")).collect();
+        let input: Vec<(String, String)> = texts.iter().map(|t| (format!("Section {t}"), t.clone())).collect();
+        let (in_flight, most) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        // Each "synthesis" takes a moment and returns the text's own bytes, so order is checkable.
+        let slow = |text: &str, _context: &str| -> anyhow::Result<Vec<u8>> {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(text.as_bytes().to_vec())
+        };
+        let mut steps = 0;
+        let out = generate_with(&store, "m", "", &input, "Kore", &CancelToken::new(), &mut |_, _, _| steps += 1, &slow, 3).unwrap();
+        assert!(most.load(Ordering::SeqCst) > 1, "chunks ran at the same time");
+        assert!(most.load(Ordering::SeqCst) <= 3, "never more than the worker count");
+        assert_eq!(steps, 9);
+        let read: Vec<String> = out.iter().map(|s| String::from_utf8(std::fs::read(&s.parts[0].path).unwrap()).unwrap()).collect();
+        assert_eq!(read, texts, "audio comes back in reading order");
+    }
+
+    #[test]
     fn a_failed_chunk_stops_the_export_and_a_rerun_reuses_finished_parts() {
         let dir = tempfile::tempdir().unwrap();
         let store = PartStore::open(dir.path()).unwrap();
         let input = sections(&[("Chapter 1", "First."), ("Chapter 2", "Second."), ("Chapter 3", "Third.")]);
-        let mut first_try = |text: &str| -> anyhow::Result<Vec<u8>> {
+        let first_try = |text: &str, _context: &str| -> anyhow::Result<Vec<u8>> {
             if text == "Second." { anyhow::bail!("503 unavailable") } else { Ok(vec![1; 4]) }
         };
-        let err = generate_with(&store, "m", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &mut first_try).unwrap_err();
+        // One worker, so nothing after the failing chunk starts.
+        let err = generate_with(&store, "m", "", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &first_try, 1).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.starts_with("Could not make the audio for \"Chapter 2\" (part 1 of 1)"), "{msg}");
         assert!(msg.ends_with("503 unavailable"), "{msg}");
 
-        let mut calls = Vec::new();
-        let out = generate_with(&store, "m", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &mut fake(&mut calls)).unwrap();
-        assert_eq!(calls, ["Second.", "Third."], "only the chunks without a saved part are synthesised again");
+        let calls = Default::default();
+        let mut steps = Vec::new();
+        let out = generate_with(&store, "m", "", &input, "Kore", &CancelToken::new(), &mut |d, t, m| steps.push(format!("{d}/{t} {m}")), &fake(&calls), 1).unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["Second.", "Third."], "only the chunks without a saved part are synthesised again");
+        assert_eq!(steps[0], "1/3 Reusing 1 saved parts of 3");
         assert_eq!(out.iter().map(|s| s.parts.len()).sum::<usize>(), 3);
 
-        let mut calls = Vec::new();
-        generate_with(&store, "m", &input, "Puck", &CancelToken::new(), &mut |_, _, _| {}, &mut fake(&mut calls)).unwrap();
-        assert_eq!(calls.len(), 3, "another voice reuses nothing");
+        let calls = Default::default();
+        generate_with(&store, "m", "", &input, "Puck", &CancelToken::new(), &mut |_, _, _| {}, &fake(&calls), 3).unwrap();
+        assert_eq!(calls.lock().unwrap().len(), 3, "another voice reuses nothing");
+    }
+
+    #[test]
+    fn with_parallel_workers_the_earliest_failure_is_reported_and_finished_chunks_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PartStore::open(dir.path()).unwrap();
+        let input = sections(&[("A", "One."), ("B", "Two."), ("C", "Three."), ("D", "Four.")]);
+        let synth = |text: &str, _context: &str| -> anyhow::Result<Vec<u8>> {
+            match text {
+                "Two." | "Four." => anyhow::bail!("503 unavailable"),
+                _ => Ok(vec![1; 2]),
+            }
+        };
+        let err = generate_with(&store, "m", "", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &synth, 4).unwrap_err();
+        assert!(format!("{err:#}").starts_with("Could not make the audio for \"B\""), "{err:#}");
+        assert!(store.get(&PartStore::key("m", "Kore", "One.")).is_some());
+    }
+
+    #[test]
+    fn each_chunk_gets_the_two_paragraphs_before_it_in_its_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PartStore::open(dir.path()).unwrap();
+        // 900-char paragraphs: three fill a 3000-char chunk, the fourth starts the next.
+        let para = |c: char| c.to_string().repeat(900);
+        let long = [para('a'), para('b'), para('c'), para('d')].join("\n\n");
+        let input = vec![("One".to_string(), long), ("Two".to_string(), "Fresh start.".to_string())];
+        let seen = std::sync::Mutex::new(Vec::new());
+        let record = |text: &str, context: &str| -> anyhow::Result<Vec<u8>> {
+            seen.lock().unwrap().push((text.chars().next().unwrap(), context.to_string()));
+            Ok(vec![0; 2])
+        };
+        generate_with(&store, "m", "", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &record, 1).unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![('a', String::new()), ('d', format!("{}\n\n{}", para('b'), para('c'))), ('F', String::new())]);
+    }
+
+    #[test]
+    fn audio_made_another_way_is_never_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PartStore::open(dir.path()).unwrap();
+        let input = sections(&[("A", "Hello.")]);
+        let calls = Default::default();
+        generate_with(&store, "m", "", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &fake(&calls), 1).unwrap();
+        generate_with(&store, "m", "expressive-Subtle", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &fake(&calls), 1).unwrap();
+        generate_with(&store, "m", "expressive-Subtle", &input, "Kore", &CancelToken::new(), &mut |_, _, _| {}, &fake(&calls), 1).unwrap();
+        assert_eq!(calls.lock().unwrap().len(), 2, "plain, then expressive once, then the saved expressive part");
     }
 
     #[test]
@@ -399,14 +606,14 @@ mod tests {
         let store = PartStore::open(dir.path()).unwrap();
         let cancel = CancelToken::new();
         let input = sections(&[("A", "One."), ("B", "Two.")]);
-        let mut synth = |text: &str| -> anyhow::Result<Vec<u8>> {
+        let synth = |text: &str, _context: &str| -> anyhow::Result<Vec<u8>> {
             if text == "Two." {
                 cancel.cancel();
                 anyhow::bail!("Operation cancelled")
             }
             Ok(vec![1; 2])
         };
-        let err = generate_with(&store, "m", &input, "Kore", &cancel, &mut |_, _, _| {}, &mut synth).unwrap_err();
+        let err = generate_with(&store, "m", "", &input, "Kore", &cancel, &mut |_, _, _| {}, &synth, 1).unwrap_err();
         assert!(err.downcast_ref::<Cancelled>().is_some());
         assert!(store.get(&PartStore::key("m", "Kore", "One.")).is_some());
     }

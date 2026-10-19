@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::ai::client::GeminiClient;
 use crate::cancel::CancelToken;
 use crate::document::Document;
-use crate::export::audio::{self, AudioPipeline, SectionAudio, all_parts};
+use crate::export::audio::{self, AudioPipeline, SectionAudio};
 use crate::export::audio_parts;
 use crate::export::base::{ExportOptions, Exporter, ProgressFn, write_file};
 use crate::export::exporters::daisy_text;
@@ -110,12 +110,13 @@ impl Exporter for DaisyAudioExporter {
         // Nothing goes into the folder until all audio is synthesised (into saved parts),
         // so a cancel or failure leaves it untouched.
         let text = daisy_text::build(doc, cancel, &mut |c, _, m| progress(c, total_steps, m))?;
-        let audio = AudioPipeline::default().generate_all_sections(&pairs, &options.voice, cancel, &mut |c, _, m| {
+        let pipeline = AudioPipeline::new(options.expressive);
+        let audio = pipeline.generate_all_sections(&pairs, &options.voice, cancel, &mut |c, _, m| {
             progress(page_count + c, total_steps, m)
         })?;
 
         let dtbook = write_audio_package(&dir, &title, &author, &text, &sections, &audio)?;
-        audio_parts::discard(&all_parts(&audio));
+        pipeline.discard(&audio);
         Ok(dtbook)
     }
 }

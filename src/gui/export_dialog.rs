@@ -12,13 +12,19 @@ use std::time::Instant;
 use winsafe::{self as w, co, gui, prelude::*};
 
 use crate::cancel::CancelToken;
+use crate::config::{self, Expressiveness};
 use crate::document::SnapshotDocument;
 use crate::events::{self, AppEvent};
 use crate::export::{self, ExportOptions, FormatInfo};
 use crate::gui::dialog::{self, Column, DialogBuilder, GAP, IDCANCEL, IDOK, MARGIN, ROW_H};
+use crate::platform::win32::a11y;
 
 const GEMINI_VOICES: [&str; 5] = ["Kore", "Puck", "Charon", "Fenrir", "Aoede"];
 const AUDIO_FORMATS: [&str; 2] = ["daisy_audio", "m4b"];
+/// The expressive narration choices, in `Expressiveness` order.
+const EXPRESSIVE: [(&str, Expressiveness); 3] = [("Off", Expressiveness::Off), ("Subtle", Expressiveness::Subtle), ("Dramatic", Expressiveness::Dramatic)];
+/// Read with the choice by screen readers, as the box has no room for a note.
+const EXPRESSIVE_NOTE: &str = "Subtle gives each character their own pitch and acts out only lines the book describes, such as she whispered. Dramatic also acts out lines whose words carry an emotion. Both make extra Gemini requests, so the export takes longer and costs about a fifth more.";
 pub(crate) const TIMER_ID: usize = 1;
 pub(crate) const TIMER_MS: u32 = 100;
 
@@ -85,6 +91,7 @@ struct ExportUi {
     toc: gui::CheckBox,
     a11y_metadata: gui::CheckBox,
     voice: gui::ComboBox,
+    expressive: gui::ComboBox,
     status: gui::Label,
     bar: gui::ProgressBar,
     export_btn: gui::Button,
@@ -126,7 +133,11 @@ pub fn show(parent: &impl GuiParent, doc: SnapshotDocument, filename: &str) {
     let epub_slot = slot();
     let toc = epub_slot.check("Include &table of contents", true);
     let a11y_metadata = epub_slot.check("Accessibility &metadata", true);
-    let voice = slot().combo("&Voice:", &GEMINI_VOICES, Some(0));
+    let audio_slot = slot();
+    let voice = audio_slot.combo("&Voice:", &GEMINI_VOICES, Some(0));
+    let names: Vec<&str> = EXPRESSIVE.iter().map(|(n, _)| *n).collect();
+    let last = EXPRESSIVE.iter().position(|(_, e)| *e == config::get().export.expressive).unwrap_or(0) as u32;
+    let expressive = audio_slot.combo("Expressive &narration:", &names, Some(last));
 
     let status = col.text("Ready to export.", 1);
     let bar = col.progress();
@@ -147,6 +158,7 @@ pub fn show(parent: &impl GuiParent, doc: SnapshotDocument, filename: &str) {
         toc,
         a11y_metadata,
         voice,
+        expressive,
         status,
         bar,
         export_btn,
@@ -174,6 +186,7 @@ pub fn show(parent: &impl GuiParent, doc: SnapshotDocument, filename: &str) {
     let u = ui.clone();
     d.wnd.on().wm_show_window(move |p| {
         if p.being_shown {
+            a11y::set_description(u.expressive.hwnd().ptr() as isize, EXPRESSIVE_NOTE);
             u.update_options();
         }
         Ok(())
@@ -214,11 +227,13 @@ impl ExportUi {
         set_visible(self.tag_pdf.hwnd(), key == "pdf");
         set_visible(self.toc.hwnd(), epub);
         set_visible(self.a11y_metadata.hwnd(), epub);
-        // Column creates each label right before its control.
-        if let Ok(label) = self.voice.hwnd().GetWindow(co::GW::HWNDPREV) {
-            set_visible(&label, audio);
+        for combo in [&self.voice, &self.expressive] {
+            // Column creates each label right before its control.
+            if let Ok(label) = combo.hwnd().GetWindow(co::GW::HWNDPREV) {
+                set_visible(&label, audio);
+            }
+            set_visible(combo.hwnd(), audio);
         }
-        set_visible(self.voice.hwnd(), audio);
     }
 
     fn browse(&self) {
@@ -248,8 +263,8 @@ impl ExportUi {
             self.warn("Please specify an output file path.", "No Output Path");
             return;
         }
-        // Fail fast on a missing folder: audio export works in memory and writes
-        // only at the very end, so a bad folder would waste the whole TTS run.
+        // Fail fast on a missing folder: audio export writes the output only at the
+        // very end, so a bad folder would waste the whole TTS run.
         let dir = Path::new(&output).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
         if !dir.is_dir() {
             self.warn(
@@ -266,6 +281,11 @@ impl ExportUi {
         options.include_toc = self.toc.is_checked();
         options.accessibility_metadata = self.a11y_metadata.is_checked();
         options.voice = self.voice.items().selected_text().ok().flatten().unwrap_or_else(|| "Kore".into());
+        if AUDIO_FORMATS.contains(&format.key) {
+            let chosen = self.expressive.items().selected_index().and_then(|i| EXPRESSIVE.get(i as usize)).map_or(Expressiveness::Off, |(_, e)| *e);
+            options.expressive = chosen;
+            config::update("export.expressive", |s| s.export.expressive = chosen);
+        }
 
         self.cancel.reset();
         self.milestone.set(0);
