@@ -3,8 +3,10 @@
 //! Before an audio export reads a passage, a text model marks it up for the TTS
 //! voice: which character says each quoted line, a short delivery style from a
 //! fixed list, and inline vocal sounds. Each character gets a pitch register
-//! from a casting pass over the whole book, so a listener can tell who is
-//! talking without "he said". The prompts and JSON schemas are the files beside
+//! and a masculine or feminine voice kind from a casting pass over the whole
+//! book, so a listener can tell who is talking without "he said": characters
+//! of the narrator's kind share its voice at their own pitch, and the others
+//! are read in a second voice ([`Voices`]). The prompts and JSON schemas are the files beside
 //! this module; `docs/expressive_narration.md` explains them and the trial that
 //! tuned them. Every reply is checked before any audio is made, and a passage
 //! whose words came back changed is read plainly instead.
@@ -15,9 +17,9 @@ use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::ai::client::{GeminiClient, text_item};
+use crate::ai::client::{GeminiClient, single_voice, text_item};
 use crate::cancel::CancelToken;
-use crate::config::Expressiveness;
+use crate::config::{Expressiveness, NarratorVoice};
 
 const NARRATION_PROMPT: &str = include_str!("narration.md");
 const DRAMATIC_PROMPT: &str = include_str!("dramatic.md");
@@ -50,6 +52,43 @@ pub struct Character {
     pub description: String,
     /// "low", "middle" or "high": the pitch that sets their voice apart.
     pub register: String,
+    /// "masculine", "feminine" or "unknown": which of the two voices reads them.
+    #[serde(default)]
+    pub voice: String,
+}
+
+/// The prebuilt voice for each kind of narrator, chosen by ear for audiobooks.
+pub const FEMININE_VOICE: &str = "Kore";
+pub const MASCULINE_VOICE: &str = "Algenib";
+/// Speaker names in a two-voice request; Gemini matches them to `speech_config`.
+const NARRATOR_SPEAKER: &str = "Narrator";
+const SECOND_SPEAKER: &str = "Second";
+
+/// An expressive export's two voices: the narrator's, which also reads
+/// characters of its own kind (set apart by pitch) and any whose kind the book
+/// doesn't make clear, and the other kind's, for the remaining characters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Voices {
+    pub narrator: &'static str,
+    pub second: &'static str,
+    /// The `Character::voice` that the second voice reads.
+    second_kind: &'static str,
+}
+
+impl Voices {
+    pub fn new(narrator: NarratorVoice) -> Self {
+        match narrator {
+            NarratorVoice::Feminine => Self { narrator: FEMININE_VOICE, second: MASCULINE_VOICE, second_kind: "masculine" },
+            NarratorVoice::Masculine => Self { narrator: MASCULINE_VOICE, second: FEMININE_VOICE, second_kind: "feminine" },
+        }
+    }
+}
+
+/// One TTS request's input: its text items and the `speech_config` that reads them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Speech {
+    pub items: Vec<Value>,
+    pub config: Value,
 }
 
 /// A run of a passage read by one speaker with one delivery.
@@ -261,59 +300,79 @@ fn carry_across_speech_tags(mut turns: Vec<Turn>) -> Vec<Turn> {
     turns
 }
 
-/// The TTS text items for `turns`: each turn's style is the speaker's pitch,
-/// then its delivery, such as "higher pitch, impatient". Google's guide allows
-/// pitch in a style but not identity, so the cast's descriptions never reach TTS.
-pub fn tts_items(turns: &[Turn], cast: &[Character]) -> Vec<Value> {
-    turns
+/// The TTS request for `turns`: each turn's style is the speaker's pitch, then
+/// its delivery, such as "higher pitch, impatient". Google's guide allows pitch
+/// in a style but not identity, so the cast's descriptions never reach TTS.
+/// When a character of the second voice's kind speaks, every item names its
+/// speaker, as a two-voice request needs; otherwise one voice reads it all.
+pub fn tts_items(turns: &[Turn], cast: &[Character], voices: Voices) -> Speech {
+    let turns: Vec<&Turn> = turns.iter().filter(|t| !t.text.trim().is_empty()).collect();
+    let character = |t: &Turn| cast.iter().find(|c| c.id == t.speaker);
+    let second = |t: &Turn| character(t).is_some_and(|c| c.voice == voices.second_kind);
+    let two_voices = turns.iter().any(|t| second(t));
+    let items = turns
         .iter()
-        .filter(|t| !t.text.trim().is_empty())
         .map(|t| {
-            let pitch = match cast.iter().find(|c| c.id == t.speaker).map(|c| c.register.as_str()) {
+            let pitch = match character(t).map(|c| c.register.as_str()) {
                 Some("low") => "lower pitch",
                 Some("high") => "higher pitch",
                 _ => "",
             };
             let style = [pitch, t.style.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ");
-            let mut item = text_item(&t.text);
+            let mut annotation = json!({ "type": "speech_metadata" });
+            if two_voices {
+                annotation["speaker"] = json!(if second(t) { SECOND_SPEAKER } else { NARRATOR_SPEAKER });
+            }
             if !style.is_empty() {
-                item["annotations"] = json!([{ "type": "speech_metadata", "style": style }]);
+                annotation["style"] = json!(style);
+            }
+            let mut item = text_item(&t.text);
+            if annotation.as_object().is_some_and(|a| a.len() > 1) {
+                item["annotations"] = json!([annotation]);
             }
             item
         })
-        .collect()
+        .collect();
+    let config = if two_voices {
+        json!({ "speakers": [{ "speaker": NARRATOR_SPEAKER, "voice": voices.narrator }, { "speaker": SECOND_SPEAKER, "voice": voices.second }] })
+    } else {
+        single_voice(voices.narrator)
+    };
+    Speech { items, config }
 }
 
-/// Marks up passages for one export: the model, the mode's prompt and the cast.
+/// Marks up passages for one export: the model, the mode's prompt, the cast and
+/// the voices.
 pub struct Narrator<'a> {
     client: &'a GeminiClient,
     model: String,
     prompt: String,
     schema: Value,
     cast: Vec<Character>,
+    voices: Voices,
 }
 
 impl<'a> Narrator<'a> {
-    pub fn new(client: &'a GeminiClient, model: &str, mode: Expressiveness, cast: Vec<Character>) -> Self {
-        Self { client, model: model.to_string(), prompt: system_prompt(mode), schema: turns_schema(&cast), cast }
+    pub fn new(client: &'a GeminiClient, model: &str, mode: Expressiveness, cast: Vec<Character>, voices: Voices) -> Self {
+        Self { client, model: model.to_string(), prompt: system_prompt(mode), schema: turns_schema(&cast), cast, voices }
     }
 
-    /// TTS items for `passage`. A reply that fails the checks is asked for once
-    /// more (a changed word is usually a one-off slip); after a second failure
-    /// the passage is read plainly, never with changed words. Request errors
-    /// that survive the client's retries are returned.
-    pub fn items(&self, context: &str, passage: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<Value>> {
+    /// The TTS request for `passage`. A reply that fails the checks is asked for
+    /// once more (a changed word is usually a one-off slip); after a second
+    /// failure the passage is read plainly by the narrator, never with changed
+    /// words. Request errors that survive the client's retries are returned.
+    pub fn speech(&self, context: &str, passage: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Speech> {
         let input = passage_input(&self.cast, context, passage);
         for attempt in 1..=2 {
             let reply = self.client.generate_json(&self.model, &self.prompt, &input, &self.schema, cancel)?;
             let turns = serde_json::from_value::<Vec<Turn>>(reply["turns"].clone()).map_err(|e| e.to_string());
             match turns.and_then(|t| check(passage, t, &self.cast)) {
-                Ok(turns) => return Ok(tts_items(&turns, &self.cast)),
+                Ok(turns) => return Ok(tts_items(&turns, &self.cast, self.voices)),
                 Err(e) => log::warn!("expressive narration, attempt {attempt}: {e}"),
             }
         }
         log::warn!("reading a passage plainly: its marked-up text failed the checks twice");
-        Ok(vec![text_item(passage)])
+        Ok(Speech { items: vec![text_item(passage)], config: single_voice(self.voices.narrator) })
     }
 }
 
@@ -322,7 +381,11 @@ mod tests {
     use super::*;
 
     fn character(id: &str, register: &str) -> Character {
-        Character { id: id.into(), name: id.into(), aliases: vec![], description: String::new(), register: register.into() }
+        Character { id: id.into(), name: id.into(), aliases: vec![], description: String::new(), register: register.into(), voice: String::new() }
+    }
+
+    fn voiced(id: &str, register: &str, voice: &str) -> Character {
+        Character { voice: voice.into(), ..character(id, register) }
     }
 
     fn texts(turns: &[Turn]) -> Vec<(&str, &str, &str)> {
@@ -338,6 +401,7 @@ mod tests {
         assert_eq!(schema["properties"]["turns"]["items"]["properties"]["speaker"]["enum"], json!(["narrator", "unknown", "holmes"]));
         assert_eq!(STYLES.len(), 14);
         assert_eq!(cast_schema()["properties"]["characters"]["items"]["properties"]["register"]["enum"], json!(["low", "middle", "high"]));
+        assert_eq!(cast_schema()["properties"]["characters"]["items"]["properties"]["voice"]["enum"], json!(["masculine", "feminine", "unknown"]));
     }
 
     #[test]
@@ -396,12 +460,13 @@ mod tests {
     #[test]
     fn tts_items_carry_pitch_then_delivery() {
         let cast = [character("mrs_bennet", "high"), character("mr_bennet", "low"), character("watson", "middle")];
-        let items = tts_items(
+        let speech = tts_items(
             &[turn("mrs_bennet", "impatient", "\"Tiresome!\""), turn("mr_bennet", "", "\"Is he?\""), turn("watson", "", "\"Yes.\""), turn("narrator", "", "  "), turn("narrator", "", "He left.")],
             &cast,
+            Voices::new(NarratorVoice::Feminine),
         );
         assert_eq!(
-            items,
+            speech.items,
             vec![
                 json!({ "type": "text", "text": "\"Tiresome!\"", "annotations": [{ "type": "speech_metadata", "style": "higher pitch, impatient" }] }),
                 json!({ "type": "text", "text": "\"Is he?\"", "annotations": [{ "type": "speech_metadata", "style": "lower pitch" }] }),
@@ -409,6 +474,25 @@ mod tests {
                 json!({ "type": "text", "text": "He left." }),
             ]
         );
+        assert_eq!(speech.config, json!([{ "voice": "Kore" }]), "no character has the other voice's kind");
+    }
+
+    #[test]
+    fn characters_of_the_other_kind_get_the_second_voice() {
+        let cast = [voiced("mrs_bennet", "high", "feminine"), voiced("mr_bennet", "low", "masculine"), voiced("stranger", "middle", "unknown")];
+        let turns = [turn("narrator", "", "His wife said, "), turn("mrs_bennet", "", "\"Netherfield!\""), turn("mr_bennet", "sarcastic", "\"Indeed.\""), turn("stranger", "", "\"Hm.\"")];
+        let speech = tts_items(&turns, &cast, Voices::new(NarratorVoice::Feminine));
+        let speakers: Vec<&Value> = speech.items.iter().map(|i| &i["annotations"][0]["speaker"]).collect();
+        assert_eq!(speakers, [&json!("Narrator"), &json!("Narrator"), &json!("Second"), &json!("Narrator")]);
+        assert_eq!(speech.items[2]["annotations"][0]["style"], json!("lower pitch, sarcastic"));
+        assert_eq!(speech.config, json!({ "speakers": [{ "speaker": "Narrator", "voice": "Kore" }, { "speaker": "Second", "voice": "Algenib" }] }));
+
+        // A masculine narrator reads the men; the women get Kore.
+        let speech = tts_items(&turns, &cast, Voices::new(NarratorVoice::Masculine));
+        assert_eq!(speech.items[1]["annotations"][0]["speaker"], json!("Second"));
+        assert_eq!(speech.items[2]["annotations"][0]["speaker"], json!("Narrator"));
+        assert_eq!(speech.config["speakers"][0]["voice"], json!("Algenib"));
+        assert_eq!(speech.config["speakers"][1]["voice"], json!("Kore"));
     }
 
     #[test]

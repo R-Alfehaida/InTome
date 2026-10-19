@@ -227,15 +227,17 @@ Press **Ctrl+Shift+S** to export the current document to another format. Availab
 - **DAISY (audio)** -- DAISY 3 with synchronized audio
 - **M4B Audiobook** -- single file with chapter markers
 
-Audio formats (DAISY audio and M4B) require a configured Gemini API key for text-to-speech.
+Audio formats (DAISY audio and M4B) require a configured Gemini API key for text-to-speech. Their **Voice** list has all 30 of Gemini's voices, each with Google's one-word description, such as "Kore (Firm)" or "Charon (Informative)". Gemini read-aloud offers the same voices.
 
 ### Expressive narration
 
 For DAISY audio and M4B, the Export dialog's Options include **Expressive narration**: Off, Subtle or Dramatic. InTome remembers your choice for the next export.
 
-- **Off** reads the text as it is, in one voice.
+- **Off** reads the text as it is, in the voice you choose from the **Voice** list.
 - **Subtle** first finds the book's characters and gives each one their own pitch, so in a conversation you can tell who is speaking even without "he said". Lines the book describes, such as "she whispered" or "cried his wife, impatiently", are read that way, and sounds the book mentions, such as a sigh or a laugh, are added.
 - **Dramatic** does all that and also acts out lines whose words plainly carry an emotion, even when the book doesn't say how they were spoken.
+
+With Subtle or Dramatic, the **Voice** list becomes **Narrator voice**: Feminine (Kore) or Masculine (Algenib). The narrator reads in that voice, and so do characters of the same kind, each at their own pitch. Characters of the other kind are read in the other voice, so in a book with a feminine narrator the men speak in Algenib. InTome works out who is a man or a woman from the book itself, from names, Mr. and Mrs., "his wife" and the like; a character it can't tell about stays in the narrator's voice. Two voices cost no more than one.
 
 The words are never changed: InTome checks every passage, and if Gemini changed a word it reads that passage plainly instead. Expressive narration makes extra Gemini requests, so the export takes a little longer and costs about a fifth more. The model it uses is set under **Preferences > Gemini Models > Expressive narration model**.
 

@@ -16,7 +16,46 @@ use crate::config;
 use crate::tts::engine::{TtsEngine, VoiceInfo};
 
 pub const NAME: &str = "Gemini TTS";
-pub const GEMINI_VOICES: [&str; 5] = ["Kore", "Puck", "Charon", "Fenrir", "Aoede"];
+/// Google's 30 prebuilt Gemini TTS voices, each with the one-word character Google
+/// gives it ("Prebuilt voices" in the speech generation guide). Kore, the default,
+/// and the four InTome offered first lead; the rest follow Google's table.
+pub const GEMINI_VOICES: [(&str, &str); 30] = [
+    ("Kore", "Firm"),
+    ("Puck", "Upbeat"),
+    ("Charon", "Informative"),
+    ("Fenrir", "Excitable"),
+    ("Aoede", "Breezy"),
+    ("Zephyr", "Bright"),
+    ("Leda", "Youthful"),
+    ("Orus", "Firm"),
+    ("Callirrhoe", "Easy-going"),
+    ("Autonoe", "Bright"),
+    ("Enceladus", "Breathy"),
+    ("Iapetus", "Clear"),
+    ("Umbriel", "Easy-going"),
+    ("Algieba", "Smooth"),
+    ("Despina", "Smooth"),
+    ("Erinome", "Clear"),
+    ("Algenib", "Gravelly"),
+    ("Rasalgethi", "Informative"),
+    ("Laomedeia", "Upbeat"),
+    ("Achernar", "Soft"),
+    ("Alnilam", "Firm"),
+    ("Schedar", "Even"),
+    ("Gacrux", "Mature"),
+    ("Pulcherrima", "Forward"),
+    ("Achird", "Friendly"),
+    ("Zubenelgenubi", "Casual"),
+    ("Vindemiatrix", "Gentle"),
+    ("Sadachbia", "Lively"),
+    ("Sadaltager", "Knowledgeable"),
+    ("Sulafat", "Warm"),
+];
+
+/// How a voice is listed: "Kore (Firm)".
+pub fn voice_label((name, character): (&str, &str)) -> String {
+    format!("{name} ({character})")
+}
 
 const SAMPLE_RATE: u32 = 24_000;
 const BYTES_PER_SECOND: usize = SAMPLE_RATE as usize * 2;
@@ -69,7 +108,7 @@ impl GeminiTtsEngine {
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
             client: Mutex::new(GeminiClient::new()?),
-            voice: Mutex::new(GEMINI_VOICES[0].to_string()),
+            voice: Mutex::new(GEMINI_VOICES[0].0.to_string()),
             cancel: CancelToken::new(),
             ctl: Mutex::new(Ctl::default()),
             changed: Condvar::new(),
@@ -117,11 +156,11 @@ impl GeminiTtsEngine {
 
 impl TtsEngine for GeminiTtsEngine {
     fn voices(&self) -> Vec<VoiceInfo> {
-        GEMINI_VOICES.iter().map(|v| VoiceInfo { id: v.to_string(), name: v.to_string(), language: "en-US".into() }).collect()
+        GEMINI_VOICES.iter().map(|&v| VoiceInfo { id: v.0.to_string(), name: voice_label(v), language: "en-US".into() }).collect()
     }
 
     fn set_voice(&self, voice_id: &str) {
-        if GEMINI_VOICES.contains(&voice_id) {
+        if GEMINI_VOICES.iter().any(|(name, _)| *name == voice_id) {
             *lock(&self.voice) = voice_id.to_string();
         } else {
             log::warn!("Gemini voice '{voice_id}' not found");
@@ -191,7 +230,17 @@ impl TtsEngine for GeminiTtsEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::pcm_to_wav;
+    use super::{GEMINI_VOICES, pcm_to_wav, voice_label};
+
+    #[test]
+    fn all_thirty_prebuilt_voices_are_listed_once_with_kore_first() {
+        let mut names: Vec<&str> = GEMINI_VOICES.iter().map(|v| v.0).collect();
+        assert_eq!(names[0], "Kore");
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 30);
+        assert_eq!(voice_label(GEMINI_VOICES[0]), "Kore (Firm)");
+    }
 
     #[test]
     fn wav_header_describes_24khz_16bit_mono() {

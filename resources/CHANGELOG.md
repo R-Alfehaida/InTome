@@ -6,8 +6,9 @@ The newest version comes first. Each version lists the features and fixes you'll
 
 ### New
 
-- **Expressive narration.** DAISY audio and M4B exports can now be read with expression. Choose Subtle or Dramatic under Expressive narration in the Export dialog's Options. InTome finds the book's characters and gives each their own pitch, so you can follow who is talking even without "he said", and reads lines the way the book describes them, such as whispered or impatient. Dramatic also acts out lines whose words carry an emotion. The words themselves are never changed. It costs about a fifth more and takes a little longer.
-- **Faster audio export.** Audio exports now ask Gemini for three pieces of audio at once, so a long audiobook takes about a third of the time. Preferences > Export > Audio export parallel requests sets how many, from 1 to 8. When Gemini says requests are coming too quickly, InTome now waits as long as Gemini asks and tries again instead of stopping.
+- **Expressive narration.** DAISY audio and M4B exports can now be read with expression. Choose Subtle or Dramatic under Expressive narration in the Export dialog's Options. InTome finds the book's characters and gives each their own pitch, so you can follow who is talking even without "he said". Choose a feminine or masculine narrator; characters of the other kind are read in a second voice, so the men and women of a book sound different. InTome also reads lines the way the book describes them, such as whispered or impatient. Dramatic also acts out lines whose words carry an emotion. The words themselves are never changed. It costs about a fifth more and takes a little longer.
+- **Faster audio export.** Audio exports now ask Gemini for three pieces of audio at once, so a long audiobook takes about a third of the time. Preferences > Export > Audio export parallel requests sets how many, from 1 to 8. When Gemini says requests are coming too quickly, InTome now waits its turn and tries again instead of stopping, which matters on new Gemini accounts that allow only 10 voice requests a minute.
+- **All 30 Gemini voices.** The Export dialog's Voice list, and Gemini read-aloud, now offer all of Gemini's voices instead of five, each with a word describing it, such as "Kore (Firm)".
 
 ## 0.0.4 (October 11, 2026)
 

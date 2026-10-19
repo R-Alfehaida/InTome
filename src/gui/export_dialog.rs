@@ -11,20 +11,24 @@ use std::time::Instant;
 
 use winsafe::{self as w, co, gui, prelude::*};
 
+use crate::ai::expressive::{FEMININE_VOICE, MASCULINE_VOICE};
 use crate::cancel::CancelToken;
-use crate::config::{self, Expressiveness};
+use crate::config::{self, Expressiveness, NarratorVoice};
 use crate::document::SnapshotDocument;
 use crate::events::{self, AppEvent};
 use crate::export::{self, ExportOptions, FormatInfo};
 use crate::gui::dialog::{self, Column, DialogBuilder, GAP, IDCANCEL, IDOK, MARGIN, ROW_H};
 use crate::platform::win32::a11y;
+use crate::tts::engines::gemini_tts::{GEMINI_VOICES, voice_label};
 
-const GEMINI_VOICES: [&str; 5] = ["Kore", "Puck", "Charon", "Fenrir", "Aoede"];
 const AUDIO_FORMATS: [&str; 2] = ["daisy_audio", "m4b"];
 /// The expressive narration choices, in `Expressiveness` order.
 const EXPRESSIVE: [(&str, Expressiveness); 3] = [("Off", Expressiveness::Off), ("Subtle", Expressiveness::Subtle), ("Dramatic", Expressiveness::Dramatic)];
 /// Read with the choice by screen readers, as the box has no room for a note.
 const EXPRESSIVE_NOTE: &str = "Subtle gives each character their own pitch and acts out only lines the book describes, such as she whispered. Dramatic also acts out lines whose words carry an emotion. Both make extra Gemini requests, so the export takes longer and costs about a fifth more.";
+/// The narrator choices for expressive narration, in `NarratorVoice` order.
+const NARRATORS: [NarratorVoice; 2] = [NarratorVoice::Feminine, NarratorVoice::Masculine];
+const NARRATOR_NOTE: &str = "Characters of the other kind, such as the men in a book with a feminine narrator, are read in the other voice. The rest share the narrator's voice at their own pitch.";
 pub(crate) const TIMER_ID: usize = 1;
 pub(crate) const TIMER_MS: u32 = 100;
 
@@ -92,6 +96,8 @@ struct ExportUi {
     a11y_metadata: gui::CheckBox,
     voice: gui::ComboBox,
     expressive: gui::ComboBox,
+    /// Takes the Voice box's place while expressive narration is on.
+    narrator: gui::ComboBox,
     status: gui::Label,
     bar: gui::ProgressBar,
     export_btn: gui::Button,
@@ -134,10 +140,18 @@ pub fn show(parent: &impl GuiParent, doc: SnapshotDocument, filename: &str) {
     let toc = epub_slot.check("Include &table of contents", true);
     let a11y_metadata = epub_slot.check("Accessibility &metadata", true);
     let audio_slot = slot();
-    let voice = audio_slot.combo("&Voice:", &GEMINI_VOICES, Some(0));
+    let export_settings = config::get().export;
     let names: Vec<&str> = EXPRESSIVE.iter().map(|(n, _)| *n).collect();
-    let last = EXPRESSIVE.iter().position(|(_, e)| *e == config::get().export.expressive).unwrap_or(0) as u32;
+    let last = EXPRESSIVE.iter().position(|(_, e)| *e == export_settings.expressive).unwrap_or(0) as u32;
     let expressive = audio_slot.combo("Expressive &narration:", &names, Some(last));
+    let voice_labels: Vec<String> = GEMINI_VOICES.iter().map(|&v| voice_label(v)).collect();
+    let voice = audio_slot.combo("&Voice:", &voice_labels.iter().map(String::as_str).collect::<Vec<_>>(), Some(0));
+    // Same row as Voice; only one of the two shows.
+    let narrator_slot = slot();
+    narrator_slot.take(ROW_H);
+    let narrator_labels = [format!("Feminine ({FEMININE_VOICE})"), format!("Masculine ({MASCULINE_VOICE})")];
+    let last = NARRATORS.iter().position(|n| *n == export_settings.narrator).unwrap_or(0) as u32;
+    let narrator = narrator_slot.combo("Narrator &voice:", &narrator_labels.iter().map(String::as_str).collect::<Vec<_>>(), Some(last));
 
     let status = col.text("Ready to export.", 1);
     let bar = col.progress();
@@ -159,6 +173,7 @@ pub fn show(parent: &impl GuiParent, doc: SnapshotDocument, filename: &str) {
         a11y_metadata,
         voice,
         expressive,
+        narrator,
         status,
         bar,
         export_btn,
@@ -171,6 +186,11 @@ pub fn show(parent: &impl GuiParent, doc: SnapshotDocument, filename: &str) {
     let u = ui.clone();
     ui.format.on().cbn_sel_change(move || {
         u.on_format_changed();
+        Ok(())
+    });
+    let u = ui.clone();
+    ui.expressive.on().cbn_sel_change(move || {
+        u.update_options();
         Ok(())
     });
     let u = ui.clone();
@@ -187,6 +207,7 @@ pub fn show(parent: &impl GuiParent, doc: SnapshotDocument, filename: &str) {
     d.wnd.on().wm_show_window(move |p| {
         if p.being_shown {
             a11y::set_description(u.expressive.hwnd().ptr() as isize, EXPRESSIVE_NOTE);
+            a11y::set_description(u.narrator.hwnd().ptr() as isize, NARRATOR_NOTE);
             u.update_options();
         }
         Ok(())
@@ -227,13 +248,18 @@ impl ExportUi {
         set_visible(self.tag_pdf.hwnd(), key == "pdf");
         set_visible(self.toc.hwnd(), epub);
         set_visible(self.a11y_metadata.hwnd(), epub);
-        for combo in [&self.voice, &self.expressive] {
+        let expressive = self.expressive_choice() != Expressiveness::Off;
+        for (combo, show) in [(&self.expressive, audio), (&self.voice, audio && !expressive), (&self.narrator, audio && expressive)] {
             // Column creates each label right before its control.
             if let Ok(label) = combo.hwnd().GetWindow(co::GW::HWNDPREV) {
-                set_visible(&label, audio);
+                set_visible(&label, show);
             }
-            set_visible(combo.hwnd(), audio);
+            set_visible(combo.hwnd(), show);
         }
+    }
+
+    fn expressive_choice(&self) -> Expressiveness {
+        self.expressive.items().selected_index().and_then(|i| EXPRESSIVE.get(i as usize)).map_or(Expressiveness::Off, |(_, e)| *e)
     }
 
     fn browse(&self) {
@@ -280,11 +306,16 @@ impl ExportUi {
         options.tag_for_accessibility = self.tag_pdf.is_checked();
         options.include_toc = self.toc.is_checked();
         options.accessibility_metadata = self.a11y_metadata.is_checked();
-        options.voice = self.voice.items().selected_text().ok().flatten().unwrap_or_else(|| "Kore".into());
+        // The list shows "Kore (Firm)"; Gemini wants the name alone.
+        options.voice = self.voice.items().selected_index().and_then(|i| GEMINI_VOICES.get(i as usize)).map_or("Kore", |v| v.0).to_string();
         if AUDIO_FORMATS.contains(&format.key) {
-            let chosen = self.expressive.items().selected_index().and_then(|i| EXPRESSIVE.get(i as usize)).map_or(Expressiveness::Off, |(_, e)| *e);
+            let (chosen, narrator) = (self.expressive_choice(), self.narrator.items().selected_index().and_then(|i| NARRATORS.get(i as usize)).copied().unwrap_or_default());
             options.expressive = chosen;
-            config::update("export.expressive", |s| s.export.expressive = chosen);
+            options.narrator = narrator;
+            config::update("export.expressive", |s| {
+                s.export.expressive = chosen;
+                s.export.narrator = narrator;
+            });
         }
 
         self.cancel.reset();

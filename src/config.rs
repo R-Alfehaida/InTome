@@ -101,6 +101,16 @@ pub enum Expressiveness {
     Dramatic,
 }
 
+/// The narrator's voice in expressive narration. Characters the casting pass
+/// finds to be of the other kind are read in the other voice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NarratorVoice {
+    #[default]
+    Feminine,
+    Masculine,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Gemini {
@@ -178,6 +188,8 @@ pub struct Export {
     pub audio_concurrent: u32,
     /// The expressive narration choice from the last audio export.
     pub expressive: Expressiveness,
+    /// The narrator voice choice from the last expressive audio export.
+    pub narrator: NarratorVoice,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -311,6 +323,7 @@ impl Default for Export {
             batch_concurrent: 2,
             audio_concurrent: 3,
             expressive: Expressiveness::Off,
+            narrator: NarratorVoice::Feminine,
         }
     }
 }

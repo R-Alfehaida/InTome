@@ -168,7 +168,7 @@ impl Exporter for M4bExporter {
         let sections = extract_chapters(doc);
         let chunks = audio::chunk_count(&sections);
         let total_steps = chunks + 1; // one per audio chunk, then encoding
-        let pipeline = AudioPipeline::new(options.expressive);
+        let pipeline = AudioPipeline::new(options.expressive, options.narrator);
         let audio = pipeline.generate_all_sections(&sections, &options.voice, cancel, &mut |c, _, m| progress(c, total_steps, m))?;
         // Chapters without text have no audio and no marker.
         let spoken: Vec<SectionAudio> = audio.iter().filter(|s| !s.is_empty()).cloned().collect();
@@ -323,22 +323,27 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "live Gemini (casting, markup and TTS for about 5 minutes of audio); needs ffmpeg, a key and the trial's Pride and Prejudice excerpt"]
+    #[ignore = "live Gemini (casting, markup and TTS for about 3 minutes of audio); needs ffmpeg, a key and the trial's Pride and Prejudice excerpt"]
     fn live_expressive_export_makes_an_audiobook_and_cleans_up() {
         use crate::document::{OpenOptions, registry};
         // Shows the cast and any passage read plainly after failing the checks.
         let _ = simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default());
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let text = std::env::var("INTOME_EXPRESSIVE_TEXT").map(std::path::PathBuf::from).unwrap_or_else(|_| root.join("target/expressive_trial/books/pp_chapter1.txt"));
+        let text = std::env::var("INTOME_EXPRESSIVE_TEXT").map(std::path::PathBuf::from).unwrap_or_else(|_| root.join("target/expressive_trial/books/pp_chapter1_short.txt"));
         let mode = match std::env::var("INTOME_EXPRESSIVE_MODE").as_deref() {
             Ok("dramatic") => crate::config::Expressiveness::Dramatic,
             _ => crate::config::Expressiveness::Subtle,
         };
+        let narrator = match std::env::var("INTOME_EXPRESSIVE_NARRATOR").as_deref() {
+            Ok("masculine") => crate::config::NarratorVoice::Masculine,
+            _ => crate::config::NarratorVoice::Feminine,
+        };
         let mut doc = registry::open_document(&text, &OpenOptions::default()).unwrap();
         let dir = root.join("target").join("live-export");
         std::fs::create_dir_all(&dir).unwrap();
-        let mut options = ExportOptions::new(dir.join(format!("expressive-{mode:?}.m4b")));
+        let mut options = ExportOptions::new(dir.join(format!("expressive-{mode:?}-{narrator:?}.m4b")));
         options.expressive = mode;
+        options.narrator = narrator;
         let before = saved_parts();
         let mut steps = Vec::new();
         let out = M4bExporter.export(&mut *doc, &options, &CancelToken::new(), &mut |c, t, m| steps.push(format!("{c}/{t} {m}"))).unwrap();

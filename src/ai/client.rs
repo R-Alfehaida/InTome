@@ -59,6 +59,10 @@ pub fn get_api_key() -> Option<String> {
 pub const OCR_MAX_OUTPUT_TOKENS: u32 = 32768;
 
 const MAX_RETRIES: u32 = 3;
+/// Rate-limit waits a request may sit through on top of its retries: on a Tier 1
+/// key TTS allows 10 requests a minute, which a parallel audio export reaches,
+/// and a long book should wait its turn, not fail.
+const MAX_RATE_LIMIT_WAITS: u32 = 20;
 const BASE_DELAY_SECS: f64 = 1.0;
 const INTERACTIONS_URL: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const MODELS_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -74,6 +78,17 @@ enum Failure {
     Quota,
     NextModel,
     Retry { delay_secs: f64 },
+    /// Too many requests just now; Google said how long to wait.
+    RateLimited { delay_secs: f64 },
+}
+
+/// Sleeps `secs`, waking early when `cancel` fires, so Cancel stays prompt during
+/// a half-minute rate-limit wait.
+fn wait(secs: f64, cancel: Option<&CancelToken>) {
+    let until = std::time::Instant::now() + Duration::from_secs_f64(secs);
+    while std::time::Instant::now() < until && !cancel.is_some_and(CancelToken::is_cancelled) {
+        std::thread::sleep(Duration::from_millis(200).min(until.saturating_duration_since(std::time::Instant::now())));
+    }
 }
 
 /// Seconds Google asks to wait before retrying ("please retry in 33.6s" or
@@ -86,13 +101,24 @@ fn retry_hint(error_lower: &str) -> Option<f64> {
     Some(secs.clamp(1.0, 60.0))
 }
 
+/// How long to wait when the error is a temporary rate limit: Google's hint, or
+/// 20 s when it only says "retry later". None for anything else, including a
+/// "limit: 0" quota, which no wait fixes.
+fn rate_limit_wait(error_lower: &str) -> Option<f64> {
+    if error_lower.contains("limit: 0") {
+        return None;
+    }
+    let limited = ["too_many_requests", "rate limit exceeded", "429 too many requests"].iter().any(|s| error_lower.contains(s));
+    retry_hint(error_lower).or(limited.then_some(20.0))
+}
+
 fn classify_failure(error_lower: &str, attempt: u32) -> Failure {
     if error_lower.contains("invalid api key") || error_lower.contains("permission") {
         Failure::Auth
     // A per-minute rate limit says when to try again; a used-up quota doesn't. Parallel
     // audio export hits per-minute limits sooner than one request at a time did.
-    } else if let Some(delay_secs) = retry_hint(error_lower).filter(|_| !error_lower.contains("limit: 0")) {
-        Failure::Retry { delay_secs }
+    } else if let Some(delay_secs) = rate_limit_wait(error_lower) {
+        Failure::RateLimited { delay_secs }
     // Quota exhausted (limit 0 = model has no free tier).
     } else if error_lower.contains("resource_exhausted") || (error_lower.contains("quota") && error_lower.contains("limit: 0")) {
         Failure::Quota
@@ -131,11 +157,16 @@ pub fn text_item(text: &str) -> Value {
     json!({ "type": "text", "text": text })
 }
 
-fn audio_request(items: Vec<Value>, voice: &str) -> Value {
+/// The `speech_config` that reads every item in one prebuilt voice.
+pub fn single_voice(voice: &str) -> Value {
+    json!([{ "voice": voice }])
+}
+
+fn audio_request(items: Vec<Value>, speech_config: Value) -> Value {
     json!({
         "input": [{ "type": "user_input", "content": items }],
         "response_format": { "type": "audio" },
-        "generation_config": { "speech_config": [{ "voice": voice }] },
+        "generation_config": { "speech_config": speech_config },
         "store": false,
     })
 }
@@ -279,10 +310,10 @@ impl GeminiClient {
                         last_error = err;
                         break;
                     }
-                    Failure::Retry { delay_secs } => {
+                    Failure::Retry { delay_secs } | Failure::RateLimited { delay_secs } => {
                         log::warn!("Gemini request failed (attempt {}/{MAX_RETRIES}): {err}. Retrying in {delay_secs:.1}s", attempt + 1);
                         last_error = err;
-                        std::thread::sleep(Duration::from_secs_f64(delay_secs));
+                        wait(delay_secs, cancel);
                     }
                 }
             }
@@ -328,12 +359,14 @@ impl GeminiClient {
 
     /// Text to raw PCM (24 kHz, 16-bit, mono).
     pub fn generate_audio(&self, text: &str, voice: &str, model: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<u8>> {
-        self.generate_audio_items(vec![text_item(text)], voice, model, cancel)
+        self.generate_audio_items(vec![text_item(text)], single_voice(voice), model, cancel)
     }
 
-    /// Text items (each with an optional `speech_metadata` style) to raw PCM (24 kHz, 16-bit, mono).
-    pub fn generate_audio_items(&self, items: Vec<Value>, voice: &str, model: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<u8>> {
-        let mut body = audio_request(items, voice);
+    /// Text items (each with an optional `speech_metadata` style and speaker) to
+    /// raw PCM (24 kHz, 16-bit, mono), read as `speech_config` says: one voice
+    /// ([`single_voice`]) or up to two named speakers.
+    pub fn generate_audio_items(&self, items: Vec<Value>, speech_config: Value, model: &str, cancel: Option<&CancelToken>) -> anyhow::Result<Vec<u8>> {
+        let mut body = audio_request(items, speech_config);
         body["model"] = json!(model);
         let data = self.request("TTS", model, &body, cancel, |response| {
             response_audio(response).map(str::to_string).ok_or_else(|| format!("response has no audio data: status {}", response["status"]))
@@ -358,8 +391,9 @@ impl GeminiClient {
     /// Sends `body` with retries and backoff until `parse` accepts the reply. One
     /// model, no fallback; "not found" just retries, as Prism's TTS did.
     fn request<T>(&self, what: &str, model: &str, body: &Value, cancel: Option<&CancelToken>, parse: impl Fn(&Value) -> Result<T, String>) -> anyhow::Result<T> {
+        let (mut attempt, mut rate_waits) = (0, 0);
         let mut last_error = String::new();
-        for attempt in 0..MAX_RETRIES {
+        while attempt < MAX_RETRIES {
             if cancel.is_some_and(CancelToken::is_cancelled) {
                 bail!("Operation cancelled");
             }
@@ -371,19 +405,24 @@ impl GeminiClient {
                 Err(e) => e,
             };
             let failure = classify_failure(&err.to_lowercase(), attempt);
-            match failure {
+            let delay = match failure {
                 Failure::Auth => bail!("Authentication error: {err}"),
                 Failure::Quota => bail!("Quota exhausted for {what} model '{model}'. Try again later or upgrade to a paid API plan."),
-                Failure::NextModel | Failure::Retry { .. } => {
-                    let delay = match failure {
-                        Failure::Retry { delay_secs } => delay_secs,
-                        _ => BASE_DELAY_SECS * 2f64.powi(attempt as i32),
-                    };
-                    log::warn!("Gemini {what} request failed (attempt {}/{MAX_RETRIES}): {err}. Retrying in {delay:.1}s", attempt + 1);
+                // Waiting our turn is not a failed attempt, up to a limit.
+                Failure::RateLimited { delay_secs } if rate_waits < MAX_RATE_LIMIT_WAITS => {
+                    rate_waits += 1;
+                    log::info!("Gemini {what} is rate limited; waiting {delay_secs:.0}s as asked ({rate_waits}/{MAX_RATE_LIMIT_WAITS})");
                     last_error = err;
-                    std::thread::sleep(Duration::from_secs_f64(delay));
+                    wait(delay_secs, cancel);
+                    continue;
                 }
-            }
+                Failure::Retry { delay_secs } | Failure::RateLimited { delay_secs } => delay_secs,
+                Failure::NextModel => BASE_DELAY_SECS * 2f64.powi(attempt as i32),
+            };
+            log::warn!("Gemini {what} request failed (attempt {}/{MAX_RETRIES}): {err}. Retrying in {delay:.1}s", attempt + 1);
+            last_error = err;
+            wait(delay, cancel);
+            attempt += 1;
         }
         bail!("Gemini {what} request failed after all retries: {last_error}")
     }
@@ -442,9 +481,15 @@ mod tests {
     #[test]
     fn a_rate_limit_that_says_when_to_retry_is_retried_after_that_delay() {
         let per_minute = "429 {\"error\":{\"message\":\"quota exceeded for metric requests per minute, limit: 10. please retry in 33.6s.\",\"status\":\"resource_exhausted\"}}";
-        assert_eq!(classify_failure(per_minute, 0), Failure::Retry { delay_secs: 33.6 });
-        assert_eq!(classify_failure("429 resource_exhausted \"retrydelay\": \"12s\"", 1), Failure::Retry { delay_secs: 12.0 });
-        assert_eq!(classify_failure("429 resource_exhausted, please retry in 500s", 0), Failure::Retry { delay_secs: 60.0 }, "capped");
+        assert_eq!(classify_failure(per_minute, 0), Failure::RateLimited { delay_secs: 33.6 });
+        assert_eq!(classify_failure("429 resource_exhausted \"retrydelay\": \"12s\"", 1), Failure::RateLimited { delay_secs: 12.0 });
+        assert_eq!(classify_failure("429 resource_exhausted, please retry in 500s", 0), Failure::RateLimited { delay_secs: 60.0 }, "capped");
+        // The Interactions API's TTS rate limit on a Tier 1 key, captured live.
+        let tier1 = "429 too many requests {\"error\":{\"message\":\"rate limit exceeded for model gemini-3.8-flash-lite-tts (limit: 10 requests per minute on tier 1). please retry in 31s or upgrade your tier at https://ai.dev/rate-limit.\",\"code\":\"too_many_requests\"}}";
+        assert_eq!(classify_failure(tier1, 0), Failure::RateLimited { delay_secs: 31.0 });
+        // The same limit sometimes says only "retry later".
+        let later = "429 too many requests {\"error\":{\"message\":\"rate limit exceeded for model gemini-3.8-flash-lite-tts (limit: 10 requests per minute on tier 1). please retry later or upgrade your tier at https://ai.dev/rate-limit.\",\"code\":\"too_many_requests\"}}";
+        assert_eq!(classify_failure(later, 0), Failure::RateLimited { delay_secs: 20.0 });
         // No free tier, or no hint: still a quota error that stops at once.
         assert_eq!(classify_failure("429 resource_exhausted limit: 0, please retry in 30s", 0), Failure::Quota);
         assert_eq!(classify_failure("429 {\"status\": \"resource_exhausted\"}", 0), Failure::Quota);
@@ -473,7 +518,7 @@ mod tests {
     #[test]
     fn audio_request_matches_interactions_shape() {
         assert_eq!(
-            audio_request(vec![text_item("Hi.")], "Kore"),
+            audio_request(vec![text_item("Hi.")], single_voice("Kore")),
             json!({
                 "input": [{ "type": "user_input", "content": [{ "type": "text", "text": "Hi." }] }],
                 "response_format": { "type": "audio" },
@@ -558,6 +603,20 @@ mod tests {
         for e in &parsed.elements {
             println!("{:?} {}..{} {:?}", e.element_type, e.start_pos, e.end_pos, e.text);
         }
+    }
+
+    #[test]
+    #[ignore = "live Gemini call; on a Tier 1 key (10 TTS requests a minute) takes about a minute"]
+    fn live_requests_over_the_rate_limit_wait_their_turn() {
+        let _ = simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default());
+        let client = live_client();
+        let model = config::get().gemini.tts_model;
+        let started = std::time::Instant::now();
+        let results: Vec<anyhow::Result<Vec<u8>>> =
+            std::thread::scope(|s| (0..14).map(|i| s.spawn({ let (client, model) = (&client, &model); move || client.generate_audio(&format!("Number {i}."), "Kore", model, None) })).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        let failed: Vec<String> = results.iter().filter_map(|r| r.as_ref().err().map(|e| format!("{e:#}"))).collect();
+        println!("14 requests in {:.0}s", started.elapsed().as_secs_f64());
+        assert!(failed.is_empty(), "{failed:#?}");
     }
 
     #[test]

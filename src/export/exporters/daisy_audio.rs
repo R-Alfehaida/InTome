@@ -110,7 +110,7 @@ impl Exporter for DaisyAudioExporter {
         // Nothing goes into the folder until all audio is synthesised (into saved parts),
         // so a cancel or failure leaves it untouched.
         let text = daisy_text::build(doc, cancel, &mut |c, _, m| progress(c, total_steps, m))?;
-        let pipeline = AudioPipeline::new(options.expressive);
+        let pipeline = AudioPipeline::new(options.expressive, options.narrator);
         let audio = pipeline.generate_all_sections(&pairs, &options.voice, cancel, &mut |c, _, m| {
             progress(page_count + c, total_steps, m)
         })?;

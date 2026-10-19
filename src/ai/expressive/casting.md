@@ -7,6 +7,7 @@ For each one, return:
 * `aliases`: every other way the narration or other characters refer to them, such as "his wife", "my dear", "Lizzy", "the doctor".
 * `description`: one short line saying who they are in the story.
 * `register`: the speaking pitch a narrator would give them to set them apart: `"low"`, `"middle"` or `"high"`. Use the book's own description where there is one. Otherwise, a usual choice is `"low"` for adult men and `"high"` for women and children, but make sure that two characters who often talk to each other get different registers.
+* `voice`: `"masculine"` or `"feminine"`, the kind of voice an audiobook would give them, judged from the book: pronouns, titles such as Mr. or Mrs., names, family roles such as "his wife", and how others address them. Use `"unknown"` when the book doesn't make it clear. Never guess from personality or behaviour alone.
 
 A third-person narrator is not a character, so don't list them. A first-person narrator who speaks in quotation marks is: list them with register `"middle"`, since the narrator's own voice reads their lines, and give the other characters registers that differ from it. Merge a character who appears under several names into one entry.
 

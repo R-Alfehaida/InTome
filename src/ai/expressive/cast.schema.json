@@ -10,9 +10,10 @@
           "name": { "type": "string" },
           "aliases": { "type": "array", "items": { "type": "string" } },
           "description": { "type": "string" },
-          "register": { "type": "string", "enum": ["low", "middle", "high"] }
+          "register": { "type": "string", "enum": ["low", "middle", "high"] },
+          "voice": { "type": "string", "enum": ["masculine", "feminine", "unknown"] }
         },
-        "required": ["id", "name", "aliases", "description", "register"]
+        "required": ["id", "name", "aliases", "description", "register", "voice"]
       }
     }
   },

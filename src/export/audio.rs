@@ -6,9 +6,9 @@ use anyhow::Context;
 use regex::Regex;
 
 use crate::ai::client::GeminiClient;
-use crate::ai::expressive::{self, Character, Narrator};
+use crate::ai::expressive::{self, Character, Narrator, Voices};
 use crate::cancel::CancelToken;
-use crate::config::{self, Expressiveness};
+use crate::config::{self, Expressiveness, NarratorVoice};
 use crate::document::{Document, TocEntry};
 use crate::export::audio_parts::{self, Part, PartStore};
 use crate::export::base::Cancelled;
@@ -210,21 +210,23 @@ pub struct AudioPipeline {
     model: String,
     narration_model: String,
     expressive: Expressiveness,
+    narrator: NarratorVoice,
     /// The saved cast of an expressive export, deleted with the audio parts.
     cast_file: Mutex<Option<Part>>,
 }
 
 impl Default for AudioPipeline {
     fn default() -> Self {
-        Self::new(Expressiveness::Off)
+        Self::new(Expressiveness::Off, NarratorVoice::Feminine)
     }
 }
 
 impl AudioPipeline {
-    /// A pipeline that reads the text as it is (`Off`) or marks it up first ([`expressive`]).
-    pub fn new(expressive: Expressiveness) -> Self {
+    /// A pipeline that reads the text as it is (`Off`) or marks it up first
+    /// ([`expressive`]) and reads it with `narrator`'s two voices.
+    pub fn new(expressive: Expressiveness, narrator: NarratorVoice) -> Self {
         let gemini = config::get().gemini;
-        Self { model: gemini.tts_model, narration_model: gemini.narration_model, expressive, cast_file: Mutex::new(None) }
+        Self { model: gemini.tts_model, narration_model: gemini.narration_model, expressive, narrator, cast_file: Mutex::new(None) }
     }
 
     /// Deletes the saved parts (and cast) behind `audio`, for when the export that
@@ -241,7 +243,7 @@ impl AudioPipeline {
     /// same characters and pitches and so reuses the audio it already made.
     fn cast(&self, store: &PartStore, client: &GeminiClient, sections: &[(String, String)], cancel: &CancelToken) -> anyhow::Result<Vec<Character>> {
         let text = sections.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n\n");
-        let key = PartStore::key(&self.narration_model, "cast-v1", &text);
+        let key = PartStore::key(&self.narration_model, "cast-v2", &text);
         let saved = store.get_file(&key, "json").and_then(|part| {
             let cast = std::fs::read(&part.path).ok().and_then(|data| serde_json::from_slice(&data).ok())?;
             Some((part, cast))
@@ -262,7 +264,7 @@ impl AudioPipeline {
                 (store.put_file(&key, "json", &serde_json::to_vec(&cast)?).context("cannot save the cast")?, cast)
             }
         };
-        log::info!("expressive narration cast: {}", cast.iter().map(|c| format!("{} ({})", c.id, c.register)).collect::<Vec<_>>().join(", "));
+        log::info!("expressive narration cast: {}", cast.iter().map(|c| format!("{} ({}, {})", c.id, c.register, c.voice)).collect::<Vec<_>>().join(", "));
         *self.cast_file.lock().unwrap_or_else(|e| e.into_inner()) = Some(part);
         Ok(cast)
     }
@@ -274,7 +276,8 @@ impl AudioPipeline {
     /// error naming its section: a book with a silently missing chapter is worse than
     /// no book, and the saved parts make trying again cheap. Cancelling returns
     /// [`Cancelled`] and also keeps the parts. `export.audio_concurrent` chunks are
-    /// synthesised at once.
+    /// synthesised at once. An expressive export reads in the narrator's voices
+    /// instead of `voice`.
     pub fn generate_all_sections(
         &self,
         sections: &[(String, String)],
@@ -294,12 +297,14 @@ impl AudioPipeline {
         // Audio made in another mode, by another narration model or with another cast is never reused.
         let cast_id = PartStore::key(&self.narration_model, "cast", &serde_json::to_string(&cast)?);
         let salt = format!("expressive-{:?}-{}-{cast_id}", self.expressive, self.narration_model);
-        let narrator = Narrator::new(&client, &self.narration_model, self.expressive, cast);
+        let voices = Voices::new(self.narrator);
+        let narrator = Narrator::new(&client, &self.narration_model, self.expressive, cast, voices);
         let synth = |text: &str, context: &str| {
-            let items = narrator.items(context, text, Some(cancel))?;
-            client.generate_audio_items(items, voice, &self.model, Some(cancel))
+            let speech = narrator.speech(context, text, Some(cancel))?;
+            client.generate_audio_items(speech.items, speech.config, &self.model, Some(cancel))
         };
-        generate_with(&store, &self.model, &salt, sections, voice, cancel, progress, &synth, workers)
+        // The narrator's voice names the parts; it also decides the second voice.
+        generate_with(&store, &self.model, &salt, sections, voices.narrator, cancel, progress, &synth, workers)
     }
 }
 
